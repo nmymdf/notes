@@ -171,6 +171,9 @@ function renderSidebar() {
   $('#count-starred').textContent = alive.filter((n) => n.starred).length || '';
   $('#count-trash').textContent = db.notes.length - alive.length || '';
   $('#count-vault').textContent = vault.unlocked ? vault.notes.length : '';
+  const undoCount = lastImportIds().length;
+  $('#btn-undo-import').classList.toggle('hidden', !undoCount);
+  $('#btn-undo-import span').textContent = `刪除上次匯入的 ${undoCount} 則`;
 
   const list = $('#folder-list');
   list.innerHTML = '';
@@ -208,12 +211,23 @@ async function renameFolder(id) {
 
 async function deleteFolder(id) {
   const f = db.folders.find((x) => x.id === id);
-  const ok = await openModal({
-    title: `刪除資料夾「${f.name}」？`,
-    text: '資料夾裡的筆記不會被刪除，會移到「所有筆記」（未分類）。',
-    okText: '刪除', danger: true,
-  });
-  if (!ok) return;
+  const inside = db.notes.filter((n) => n.folderId === id && !n.deletedAt);
+  let mode = 'keep';
+  if (inside.length) {
+    mode = await openModal({
+      title: `刪除資料夾「${f.name}」？`,
+      text: `這個資料夾裡有 ${inside.length} 則筆記，要怎麼處理？`,
+      options: [
+        { value: 'trash', label: `連同 ${inside.length} 則筆記一起刪除（移到垃圾筒，30 天內可還原）` },
+        { value: 'keep', label: '只刪除資料夾，筆記移到「所有筆記」' },
+      ],
+      okText: '刪除', danger: true,
+    });
+  } else {
+    mode = (await openModal({ title: `刪除資料夾「${f.name}」？`, text: '這個資料夾是空的。', okText: '刪除', danger: true })) && 'keep';
+  }
+  if (!mode) return;
+  if (mode === 'trash') trashNotes(inside.map((n) => n.id));
   db.folders = db.folders.filter((x) => x.id !== id);
   for (const n of db.notes) if (n.folderId === id) n.folderId = null;
   if (state.view === id) state.view = 'all';
@@ -300,7 +314,7 @@ function renderList() {
 
   $('#sort-field').value = state.prefs.sort;
   $('#btn-sort-dir use').setAttribute('href', state.prefs.dir === 'asc' ? '#i-up' : '#i-down');
-  $('#btn-view-mode use').setAttribute('href', state.prefs.layout === 'grid' ? '#i-grid' : '#i-list');
+  $('#btn-view-mode use').setAttribute('href', { grid: '#i-grid', list: '#i-list', table: '#i-table' }[state.prefs.layout] || '#i-grid');
 
   const container = $('#notes');
   container.className = state.prefs.layout + (gate ? ' hidden' : '');
@@ -308,6 +322,9 @@ function renderList() {
   container.innerHTML = '';
 
   const notes = visibleNotes();
+  if (state.prefs.layout === 'table' && notes.length) {
+    container.insertAdjacentHTML('beforeend', '<div class="table-head"><span class="check"></span><div>標題</div><div>內容</div></div>');
+  }
   for (const n of notes) {
     const card = document.createElement('div');
     card.className = 'note-card' + (state.selected.has(n.id) ? ' selected' : '');
@@ -315,6 +332,17 @@ function renderList() {
     card.draggable = !inTrash && !inVault;
     const img = firstImage(n.html);
     const snippet = (n.text || '').slice(0, 220);
+    const dateText = inTrash
+      ? `${Math.max(0, TRASH_DAYS - Math.floor((Date.now() - n.deletedAt) / 86400000))} 天後永久刪除`
+      : formatDate(n[state.prefs.sort === 'createdAt' ? 'createdAt' : 'updatedAt']);
+    if (state.prefs.layout === 'table') {
+      card.innerHTML = '<span class="check"></span><div class="t-title"></div><div class="t-body"></div>';
+      card.querySelector('.t-title').textContent = (n.starred && !inTrash ? '★ ' : '') + noteTitle(n);
+      card.querySelector('.t-body').textContent = (img && !snippet.trim() ? '［圖片］' : '') + snippet.replace(/\s*\n+\s*/g, '　');
+      card.title = dateText;
+      container.appendChild(card);
+      continue;
+    }
     card.innerHTML = `
       <span class="check"></span>
       <div class="thumb">
@@ -326,9 +354,7 @@ function renderList() {
     card.querySelector('.snippet').textContent = snippet;
     card.querySelector('.meta b').textContent = noteTitle(n);
     card.querySelector('.meta .line').textContent = snippet.replace(/\n+/g, ' ');
-    card.querySelector('.meta small').textContent = inTrash
-      ? `${Math.max(0, TRASH_DAYS - Math.floor((Date.now() - n.deletedAt) / 86400000))} 天後永久刪除`
-      : formatDate(n[state.prefs.sort === 'createdAt' ? 'createdAt' : 'updatedAt']);
+    card.querySelector('.meta small').textContent = dateText;
     container.appendChild(card);
   }
 
@@ -1100,13 +1126,24 @@ $('#btn-delete-note').addEventListener('click', async () => {
 
 // ---------------------------------------------------------------- list interactions
 
+let lastClickedId = null;
 $('#notes').addEventListener('click', (e) => {
   const card = e.target.closest('.note-card');
   if (!card) return;
   const id = card.dataset.id;
-  if (state.selecting || e.ctrlKey) {
+  if (state.selecting || e.ctrlKey || e.shiftKey) {
     state.selecting = true;
-    if (state.selected.has(id)) state.selected.delete(id); else state.selected.add(id);
+    const order = visibleNotes().map((n) => n.id);
+    if (e.shiftKey && lastClickedId && order.includes(lastClickedId)) {
+      // Shift+click selects everything between the last clicked note and this one.
+      const [a, b] = [order.indexOf(lastClickedId), order.indexOf(id)].sort((x, y) => x - y);
+      for (const x of order.slice(a, b + 1)) state.selected.add(x);
+    } else if (state.selected.has(id)) {
+      state.selected.delete(id);
+    } else {
+      state.selected.add(id);
+    }
+    lastClickedId = id;
     renderList();
   } else {
     openEditor(id);
@@ -1190,50 +1227,166 @@ function textToHtml(text) {
   return text.split('\n').map((l) => `<div>${l ? escapeHtml(l) : '<br>'}</div>`).join('');
 }
 
+// Outlook puts title and text in one field (記事本文). The title is the text up
+// to the first space (half/full width), tab, line break or colon, at most
+// TITLE_MAX characters; the rest becomes the content.
+const TITLE_MAX = 30;
+function splitTitle(text) {
+  const t = text.replace(/^[\s\u3000]+/, '');
+  const m = /[ \t\n\u3000:：]/.exec(t);
+  const end = m && m.index > 0 ? Math.min(m.index, TITLE_MAX) : Math.min(t.length, TITLE_MAX);
+  const title = t.slice(0, end).trim();
+  let rest = t.slice(end);
+  if (m && m.index === end) rest = rest.slice(1); // drop the separator itself
+  return { title, body: rest };
+}
+
+// Turn CSV rows into {title, body}. With a title column (e.g. English
+// "Subject") it is used as is; otherwise the title is split off the content.
+function outlookRowsToNotes(rows, titleCol, bodyCol) {
+  const out = [];
+  for (const r of rows) {
+    let raw = (bodyCol >= 0 ? r[bodyCol] || '' : '').replace(/\r\n?/g, '\n');
+    let title = titleCol >= 0 ? (r[titleCol] || '').trim() : '';
+    if (title) {
+      const lines = raw.split('\n');
+      while (lines.length && !lines[0].trim()) lines.shift();
+      if (lines.length && lines[0].trim() === title) lines.shift(); // Outlook repeats the subject
+      raw = lines.join('\n');
+    } else {
+      ({ title, body: raw } = splitTitle(raw));
+    }
+    const body = raw.replace(/^[\s\u3000]+/, '').replace(/[\s\u3000]+$/, '');
+    if (title || body) out.push({ title, body });
+  }
+  return out;
+}
+
+function openImportDialog(res) {
+  return new Promise((resolve) => {
+    const dlg = $('#import-dialog');
+    const tSel = $('#import-title');
+    const bSel = $('#import-body');
+    const sample = (c) => {
+      const v = (res.rows.find((r) => (r[c] || '').trim()) || [])[c] || '';
+      return v.replace(/\s+/g, ' ').trim().slice(0, 24);
+    };
+    tSel.innerHTML = '';
+    bSel.innerHTML = '';
+    tSel.add(new Option('（自動：取內容開頭到第一個空格／換行／冒號）', '-1'));
+    bSel.add(new Option('（無）', '-1'));
+    res.columns.forEach((name, i) => {
+      const label = `${name}${sample(i) ? `　例：${sample(i)}` : '　（空白）'}`;
+      tSel.add(new Option(label, String(i)));
+      bSel.add(new Option(label, String(i)));
+    });
+    tSel.value = String(res.guess.title);
+    bSel.value = String(res.guess.body);
+
+    const existing = new Set(db.notes.filter((n) => !n.deletedAt).map((n) => n.title + '\u0000' + n.text));
+    let fresh = [];
+    const update = () => {
+      const notes = outlookRowsToNotes(res.rows, +tSel.value, +bSel.value);
+      fresh = notes.filter((o) => !existing.has(o.title + '\u0000' + htmlToText(textToHtml(o.body))));
+      const skipped = notes.length - fresh.length;
+      $('#import-summary').textContent = `「${res.file}」共 ${res.rows.length} 列，可匯入 ${notes.length} 則記事`
+        + (skipped ? `（其中 ${skipped} 則已匯入過，會略過）` : '')
+        + '。\n請確認下方預覽的標題和內容正確；不對的話，換一下上面的欄位。';
+      const prev = $('#import-preview');
+      prev.innerHTML = '<div class="row head"><div>標題</div><div>內容</div></div>';
+      for (const n of notes.slice(0, 5)) {
+        const row = document.createElement('div');
+        row.className = 'row';
+        row.innerHTML = '<div></div><div></div>';
+        row.children[0].textContent = n.title || '（空白）';
+        row.children[1].textContent = n.body || '（空白）';
+        if (!n.title) row.children[0].classList.add('empty-cell');
+        if (!n.body) row.children[1].classList.add('empty-cell');
+        prev.appendChild(row);
+      }
+      $('#import-ok').textContent = fresh.length ? `匯入 ${fresh.length} 則` : '沒有可匯入的記事';
+      $('#import-ok').disabled = !fresh.length;
+    };
+    tSel.onchange = update;
+    bSel.onchange = update;
+    update();
+
+    const close = (value) => {
+      dlg.classList.add('hidden');
+      $('#import-form').onsubmit = null;
+      $('#import-cancel').onclick = null;
+      dlg.onkeydown = null;
+      resolve(value);
+    };
+    $('#import-form').onsubmit = (e) => { e.preventDefault(); close(fresh); };
+    $('#import-cancel').onclick = () => close(null);
+    dlg.onkeydown = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(null); } };
+    dlg.classList.remove('hidden');
+  });
+}
+
 async function importOutlook() {
   const res = await api.importOutlook();
   if (!res) return;
-  if (!res.notes.length) {
-    openModal({ title: '找不到記事', text: `「${res.file}」裡沒有可匯入的記事。請確認是從 Outlook 的「記事」資料夾匯出的 CSV 檔。`, okText: '知道了' });
+  if (!res.rows.length) {
+    openModal({ title: '找不到記事', text: `「${res.file}」裡沒有資料。請確認是從 Outlook 的「記事」資料夾匯出的 CSV 檔。`, okText: '知道了' });
     return;
   }
-  const FOLDER = 'Outlook 記事';
-  const existing = new Set(db.notes.filter((n) => !n.deletedAt).map((n) => n.title + '\u0000' + n.text));
-  const fresh = res.notes.filter((o) => !existing.has(o.title + '\u0000' + htmlToText(textToHtml(o.body))));
-  const skipped = res.notes.length - fresh.length;
-  const ok = await openModal({
-    title: `找到 ${res.notes.length} 則 Outlook 記事`,
-    text: `將匯入到資料夾「${FOLDER}」，每則記事成為一則筆記。`
-      + (skipped ? `\n其中 ${skipped} 則已經匯入過，會自動略過。` : ''),
-    okText: fresh.length ? `匯入 ${fresh.length} 則` : '確定',
-  });
-  if (!ok || !fresh.length) return;
+  const fresh = await openImportDialog(res);
+  if (!fresh || !fresh.length) return;
 
+  const FOLDER = 'Outlook 記事';
   let folder = db.folders.find((f) => f.name === FOLDER);
   if (!folder) {
     folder = { id: uid(), name: FOLDER, createdAt: Date.now() };
     db.folders.push(folder);
   }
   // CSV has no dates; keep the file's order under the default "newest first" sort.
+  // Every note remembers its import batch so the whole import can be undone.
   const now = Date.now();
+  const batch = uid();
   fresh.forEach((o, i) => {
     const html = textToHtml(o.body);
     const ts = now - i;
     db.notes.push({
       id: uid(), title: o.title, html, text: htmlToText(html), folderId: folder.id,
-      starred: false, createdAt: ts, updatedAt: ts, deletedAt: null,
+      starred: false, createdAt: ts, updatedAt: ts, deletedAt: null, importBatch: batch,
     });
   });
+  db.lastImport = { batch, file: res.file, at: now };
   await persist(true);
   setView(folder.id);
   toast(`已匯入 ${fresh.length} 則 Outlook 記事`);
 }
 $('#btn-import-outlook').addEventListener('click', importOutlook);
 
+const lastImportIds = () => (db.lastImport
+  ? db.notes.filter((n) => !n.deletedAt && n.importBatch === db.lastImport.batch).map((n) => n.id)
+  : []);
+$('#btn-undo-import').addEventListener('click', async () => {
+  const ids = lastImportIds();
+  if (!ids.length) return;
+  const ok = await openModal({
+    title: `刪除上次匯入的 ${ids.length} 則筆記？`,
+    text: `來源：${db.lastImport.file}\n筆記會移到垃圾筒，30 天內可以還原。`,
+    okText: '刪除', danger: true,
+  });
+  if (!ok) return;
+  closeEditor();
+  trashNotes(ids);
+  render();
+});
+
 $('#btn-new-note').addEventListener('click', () => createNote());
 $('#btn-new-image-note').addEventListener('click', createImageNote);
 $('#btn-new-voice-note').addEventListener('click', () => { createNote(); startVoice(); });
-$('#btn-select-mode').addEventListener('click', () => { state.selecting = true; state.selected.clear(); renderList(); });
+$('#btn-select-mode').addEventListener('click', () => {
+  state.selecting = true;
+  state.selected.clear();
+  lastClickedId = null;
+  renderList();
+  toast('點選筆記來選取；按住 Shift 點另一則可一次選取中間全部');
+});
 $('#btn-select-done').addEventListener('click', () => { state.selecting = false; state.selected.clear(); renderList(); });
 $('#btn-select-all').addEventListener('click', () => {
   const ids = visibleNotes().map((n) => n.id);
@@ -1280,10 +1433,18 @@ $('#btn-empty-trash').addEventListener('click', async () => {
   const ids = db.notes.filter((n) => n.deletedAt).map((n) => n.id);
   if (ids.length && (await destroyNotes(ids))) render();
 });
-$('#btn-view-mode').addEventListener('click', () => {
-  state.prefs.layout = state.prefs.layout === 'grid' ? 'list' : 'grid';
-  savePrefs();
-  renderList();
+const LAYOUTS = [
+  { value: 'grid', label: '卡片' },
+  { value: 'list', label: '清單' },
+  { value: 'table', label: '標題＋內容（兩欄）' },
+];
+$('#btn-view-mode').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const r = e.currentTarget.getBoundingClientRect();
+  showContextMenu(r.left, r.bottom + 4, LAYOUTS.map((l) => ({
+    label: (state.prefs.layout === l.value ? '✓ ' : '　 ') + l.label,
+    action: () => { state.prefs.layout = l.value; savePrefs(); renderList(); },
+  })));
 });
 $('#sort-field').addEventListener('change', (e) => { state.prefs.sort = e.target.value; savePrefs(); renderList(); });
 $('#btn-sort-dir').addEventListener('click', () => {
@@ -1300,7 +1461,7 @@ document.addEventListener('click', (e) => {
 });
 
 document.addEventListener('keydown', (e) => {
-  if (!$('#modal').classList.contains('hidden')) return;
+  if (!$('#modal').classList.contains('hidden') || !$('#import-dialog').classList.contains('hidden')) return;
   const inEditor = !!state.currentId;
   if (e.key === 'Escape') {
     if (!$('#color-palette').classList.contains('hidden')) { closePalette(); return; }

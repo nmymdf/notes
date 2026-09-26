@@ -8,7 +8,7 @@ const crypto = require('crypto');
 const { pathToFileURL } = require('url');
 const { execFile } = require('child_process');
 const { Vault } = require('./vault');
-const { parseOutlookNotesCsv } = require('./outlook-import');
+const { readOutlookCsv } = require('./outlook-import');
 
 const IMG_SCHEME = 'note-img';
 const QUICK_NOTE_SHORTCUT = 'CommandOrControl+Alt+N';
@@ -219,7 +219,7 @@ function registerIpc() {
     });
     if (res.canceled || !res.filePaths.length) return null;
     const file = res.filePaths[0];
-    return { file: path.basename(file), notes: parseOutlookNotesCsv(fs.readFileSync(file)) };
+    return { file: path.basename(file), ...readOutlookCsv(fs.readFileSync(file)) };
   });
 
   ipcMain.handle('note:export', async (_e, { title, html }) => {
