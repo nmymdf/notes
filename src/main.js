@@ -7,6 +7,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { pathToFileURL } = require('url');
 const { execFile } = require('child_process');
+const { Vault } = require('./vault');
 
 const IMG_SCHEME = 'note-img';
 const QUICK_NOTE_SHORTCUT = 'CommandOrControl+Alt+N';
@@ -18,6 +19,7 @@ protocol.registerSchemesAsPrivileged([
 let dataDir;
 let imagesDir;
 let dbFile;
+let vault;
 let mainWindow = null;
 let tray = null;
 let quitting = false;
@@ -41,11 +43,14 @@ function loadDb() {
   }
 }
 
-function saveDb(db) {
+// `scrub` also overwrites the backup, used after notes are moved into the
+// vault so no plaintext copy of them is left in notes.json.bak.
+function saveDb(db, { scrub = false } = {}) {
   const tmp = `${dbFile}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(db, null, 2), 'utf8');
   if (fs.existsSync(dbFile)) fs.copyFileSync(dbFile, `${dbFile}.bak`);
   fs.renameSync(tmp, dbFile);
+  if (scrub) fs.copyFileSync(dbFile, `${dbFile}.bak`);
 }
 
 const EXT_BY_MIME = {
@@ -53,9 +58,12 @@ const EXT_BY_MIME = {
   'image/webp': 'webp', 'image/bmp': 'bmp', 'image/svg+xml': 'svg',
 };
 
-function saveImage(buffer, mime) {
+const mimeOf = (file) => Object.keys(EXT_BY_MIME).find((k) => EXT_BY_MIME[k] === path.extname(file).slice(1)) || 'image/png';
+
+function saveImage(buffer, mime, inVault = false) {
   const ext = EXT_BY_MIME[mime] || 'png';
   const name = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}.${ext}`;
+  if (inVault) return vault.saveImage(name, buffer);
   fs.writeFileSync(path.join(imagesDir, name), Buffer.from(buffer));
   return `${IMG_SCHEME}://img/${name}`;
 }
@@ -114,6 +122,10 @@ function createWindow() {
       mainWindow.hide();
     }
   });
+  // Locked notes lock again whenever the window goes away.
+  const notifyHidden = () => mainWindow.webContents.send('app:hidden');
+  mainWindow.on('hide', notifyHidden);
+  mainWindow.on('minimize', notifyHidden);
 }
 
 function showWindow() {
@@ -160,11 +172,11 @@ function createTray() {
 
 function registerIpc() {
   ipcMain.handle('db:load', () => loadDb());
-  ipcMain.handle('db:save', (_e, db) => { saveDb(db); return true; });
+  ipcMain.handle('db:save', (_e, db, opts) => { saveDb(db, opts); return true; });
   ipcMain.handle('db:cleanup-images', () => { cleanupImages(loadDb()); return true; });
 
-  ipcMain.handle('image:save', (_e, { buffer, mime }) => saveImage(buffer, mime));
-  ipcMain.handle('image:pick', async () => {
+  ipcMain.handle('image:save', (_e, { buffer, mime, inVault }) => saveImage(buffer, mime, inVault));
+  ipcMain.handle('image:pick', async (_e, inVault) => {
     const res = await dialog.showOpenDialog(mainWindow, {
       title: '選擇圖片',
       properties: ['openFile', 'multiSelections'],
@@ -175,9 +187,32 @@ function registerIpc() {
       const ext = path.extname(p).slice(1).toLowerCase();
       const mime = Object.keys(EXT_BY_MIME).find((k) => EXT_BY_MIME[k] === ext)
         || (ext === 'jpeg' ? 'image/jpeg' : 'image/png');
-      return saveImage(fs.readFileSync(p), mime);
+      return saveImage(fs.readFileSync(p), mime, inVault);
     });
   });
+
+  // ----- locked notes
+  ipcMain.handle('vault:status', () => ({ exists: vault.exists(), unlocked: vault.unlocked }));
+  ipcMain.handle('vault:create', (_e, password) => vault.create(password));
+  ipcMain.handle('vault:unlock', (_e, password) => vault.unlock(password));
+  ipcMain.handle('vault:save', (_e, notes) => { vault.save(notes); return true; });
+  ipcMain.handle('vault:lock', () => { vault.lock(); return true; });
+  ipcMain.handle('vault:change-password', (_e, oldPw, newPw) => vault.changePassword(oldPw, newPw));
+  // Moving a note in/out of the vault re-stores its images encrypted/plain.
+  ipcMain.handle('vault:import-images', (_e, html) => html.replace(
+    new RegExp(`${IMG_SCHEME}://img/([\\w.-]+)`, 'g'),
+    (all, file) => {
+      const p = path.join(imagesDir, file);
+      return fs.existsSync(p) ? vault.saveImage(file, fs.readFileSync(p)) : all;
+    },
+  ));
+  ipcMain.handle('vault:export-images', (_e, html) => html.replace(
+    new RegExp(`${IMG_SCHEME}://vault/([\\w.-]+)`, 'g'),
+    (all, file) => {
+      const plain = vault.readImage(file);
+      return plain ? saveImage(plain, mimeOf(file)) : all;
+    },
+  ));
 
   ipcMain.handle('note:export', async (_e, { title, html }) => {
     const safe = (title || '未命名筆記').replace(/[\\/:*?"<>|]/g, '_');
@@ -243,8 +278,16 @@ if (!app.requestSingleInstanceLock()) {
     dbFile = path.join(dataDir, 'notes.json');
     fs.mkdirSync(imagesDir, { recursive: true });
 
+    vault = new Vault(dataDir);
+
     protocol.handle(IMG_SCHEME, (req) => {
-      const file = path.basename(decodeURIComponent(new URL(req.url).pathname));
+      const url = new URL(req.url);
+      const file = path.basename(decodeURIComponent(url.pathname));
+      if (url.host === 'vault') {
+        const plain = vault.readImage(file);
+        if (!plain) return new Response('locked', { status: 403 });
+        return new Response(plain, { headers: { 'content-type': mimeOf(file), 'cache-control': 'no-store' } });
+      }
       return net.fetch(pathToFileURL(path.join(imagesDir, file)).toString());
     });
 

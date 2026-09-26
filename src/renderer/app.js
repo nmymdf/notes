@@ -8,6 +8,9 @@ const TRASH_DAYS = 30;
 const PREFS_KEY = 'desknotes.prefs';
 
 let db = { version: 1, folders: [], notes: [] };
+// Locked notes: decrypted copies live here only while the vault is unlocked.
+const vault = { exists: false, unlocked: false, notes: [] };
+const VAULT_IDLE_MS = 5 * 60 * 1000;
 const state = {
   view: 'all',              // 'all' | 'starred' | 'trash' | folder id
   search: '',
@@ -51,6 +54,11 @@ function noteTitle(n) {
   return /<img/i.test(n.html) ? '圖片筆記' : '未命名筆記';
 }
 
+const inVaultView = () => state.view === 'vault';
+const findNote = (id) => db.notes.find((x) => x.id === id) || vault.notes.find((x) => x.id === id);
+const isVaultNote = (n) => vault.notes.includes(n);
+const currentInVault = () => { const n = findNote(state.currentId); return !!n && isVaultNote(n); };
+
 function toast(msg) {
   const el = $('#toast');
   el.textContent = msg;
@@ -74,6 +82,7 @@ function persist(immediate = false) {
   const run = async () => {
     try {
       await api.save(db);
+      if (vault.unlocked) await api.vault.save(vault.notes);
       if (state.currentId) $('#save-state').textContent = '已儲存';
     } catch (err) {
       console.error(err);
@@ -94,7 +103,7 @@ function purgeOldTrash() {
 
 // ---------------------------------------------------------------- modal / menus
 
-function openModal({ title, text = '', input = null, options = null, okText = '確定', danger = false }) {
+function openModal({ title, text = '', input = null, options = null, okText = '確定', danger = false, password = false }) {
   return new Promise((resolve) => {
     const modal = $('#modal');
     $('#modal-title').textContent = title;
@@ -103,6 +112,7 @@ function openModal({ title, text = '', input = null, options = null, okText = '�
     const inp = $('#modal-input');
     inp.classList.toggle('hidden', input === null);
     inp.value = input ?? '';
+    inp.type = password ? 'password' : 'text';
     const sel = $('#modal-select');
     sel.classList.toggle('hidden', !options);
     sel.innerHTML = '';
@@ -122,7 +132,7 @@ function openModal({ title, text = '', input = null, options = null, okText = '�
     };
     $('#modal-form').onsubmit = (e) => {
       e.preventDefault();
-      if (input !== null) close(inp.value.trim() || null);
+      if (input !== null) close((password ? inp.value : inp.value.trim()) || null);
       else if (options) close(sel.value);
       else close(true);
     };
@@ -161,6 +171,7 @@ function renderSidebar() {
   $('#count-all').textContent = alive.length;
   $('#count-starred').textContent = alive.filter((n) => n.starred).length || '';
   $('#count-trash').textContent = db.notes.length - alive.length || '';
+  $('#count-vault').textContent = vault.unlocked ? vault.notes.length : '';
 
   const list = $('#folder-list');
   list.innerHTML = '';
@@ -214,15 +225,22 @@ async function deleteFolder(id) {
 // ---------------------------------------------------------------- list
 
 function visibleNotes() {
-  const q = state.search.toLowerCase();
-  let notes = db.notes.filter((n) => {
+  if (inVaultView()) return sortNotes((vault.unlocked ? vault.notes : []).filter(matchesSearch));
+  return sortNotes(db.notes.filter((n) => {
     if (state.view === 'trash') return !!n.deletedAt;
     if (n.deletedAt) return false;
     if (state.view === 'starred') return n.starred;
     if (state.view !== 'all') return n.folderId === state.view;
     return true;
-  });
-  if (q) notes = notes.filter((n) => (n.title + '\n' + n.text).toLowerCase().includes(q));
+  }).filter(matchesSearch));
+}
+
+function matchesSearch(n) {
+  const q = state.search.toLowerCase();
+  return !q || (n.title + '\n' + n.text).toLowerCase().includes(q);
+}
+
+function sortNotes(notes) {
   const { sort, dir } = state.prefs;
   const mul = dir === 'asc' ? 1 : -1;
   notes.sort((a, b) => {
@@ -236,21 +254,47 @@ function viewTitle() {
   if (state.view === 'all') return '所有筆記';
   if (state.view === 'starred') return '我的最愛';
   if (state.view === 'trash') return '垃圾筒';
+  if (state.view === 'vault') return '上鎖筆記';
   return db.folders.find((f) => f.id === state.view)?.name || '所有筆記';
+}
+
+function renderVaultGate(show) {
+  const gate = $('#vault-gate');
+  gate.classList.toggle('hidden', !show);
+  if (!show) return;
+  const creating = !vault.exists;
+  $('#vault-gate-title').textContent = creating ? '建立上鎖筆記' : '上鎖筆記';
+  $('#vault-gate-text').textContent = creating
+    ? '設定一組密碼，這裡的筆記與圖片都會用它加密保存。\n⚠ 程式不會保存你的密碼，忘記密碼就無法找回內容，請務必記住。'
+    : '輸入密碼以開啟上鎖筆記';
+  $('#vault-pw2').classList.toggle('hidden', !creating);
+  $('#vault-gate-ok').textContent = creating ? '設定密碼並開啟' : '解鎖';
 }
 
 function renderList() {
   const inTrash = state.view === 'trash';
+  const inVault = inVaultView();
+  const gate = inVault && !vault.unlocked;
   $('#view-title').textContent = viewTitle();
   $('#btn-empty-trash').classList.toggle('hidden', !inTrash || state.selecting);
-  $('#btn-new-note').classList.toggle('hidden', inTrash);
-  $('#btn-new-image-note').classList.toggle('hidden', inTrash);
-  $('#btn-new-voice-note').classList.toggle('hidden', inTrash);
+  $('#btn-new-note').classList.toggle('hidden', inTrash || gate);
+  $('#btn-new-image-note').classList.toggle('hidden', inTrash || gate);
+  $('#btn-new-voice-note').classList.toggle('hidden', inTrash || gate);
+  $('#btn-select-mode').classList.toggle('hidden', gate);
+  $('#btn-view-mode').classList.toggle('hidden', gate);
+  $('#btn-vault-lock').classList.toggle('hidden', !inVault || gate);
+  $('#btn-vault-password').classList.toggle('hidden', !inVault || gate);
+  $('.search').classList.toggle('hidden', gate);
+  $('.sortbar').classList.toggle('hidden', gate);
+  $('#notes').classList.toggle('hidden', gate);
+  renderVaultGate(gate);
   $('#normal-actions').classList.toggle('hidden', state.selecting);
   $('#select-actions').classList.toggle('hidden', !state.selecting);
   $('#btn-sel-restore').classList.toggle('hidden', !inTrash);
-  $('#btn-sel-move').classList.toggle('hidden', inTrash);
-  $('#btn-sel-delete').lastChild.textContent = inTrash ? '永久刪除' : '刪除';
+  $('#btn-sel-move').classList.toggle('hidden', inTrash || inVault);
+  $('#btn-sel-vault').classList.toggle('hidden', inTrash || inVault);
+  $('#btn-sel-unvault').classList.toggle('hidden', !inVault);
+  $('#btn-sel-delete').lastChild.textContent = inTrash || inVault ? '永久刪除' : '刪除';
   $('#select-count').textContent = `已選取 ${state.selected.size} 則`;
   $$('#select-actions .text-btn:not(#btn-select-all):not(#btn-select-done)')
     .forEach((b) => { b.disabled = state.selected.size === 0; });
@@ -260,7 +304,7 @@ function renderList() {
   $('#btn-view-mode use').setAttribute('href', state.prefs.layout === 'grid' ? '#i-grid' : '#i-list');
 
   const container = $('#notes');
-  container.className = state.prefs.layout;
+  container.className = state.prefs.layout + (gate ? ' hidden' : '');
   container.classList.toggle('selecting', state.selecting);
   container.innerHTML = '';
 
@@ -269,7 +313,7 @@ function renderList() {
     const card = document.createElement('div');
     card.className = 'note-card' + (state.selected.has(n.id) ? ' selected' : '');
     card.dataset.id = n.id;
-    card.draggable = !inTrash;
+    card.draggable = !inTrash && !inVault;
     const img = firstImage(n.html);
     const snippet = (n.text || '').slice(0, 220);
     card.innerHTML = `
@@ -290,9 +334,10 @@ function renderList() {
   }
 
   const empty = $('#empty');
-  empty.classList.toggle('hidden', notes.length > 0);
+  empty.classList.toggle('hidden', notes.length > 0 || gate);
   if (!notes.length) {
     empty.innerHTML = state.search ? '找不到符合的筆記'
+      : inVault ? '上鎖筆記是空的<br><small>在這裡建立的筆記會加密保存，也可以在其他筆記按右鍵「移到上鎖筆記」</small>'
       : inTrash ? `垃圾筒是空的<br><small>刪除的筆記會保留 ${TRASH_DAYS} 天</small>`
         : '還沒有筆記<br><small>按「建立筆記」、Ctrl+N，或直接 Ctrl+V 貼上截圖開始</small>';
   }
@@ -304,23 +349,164 @@ function render() {
 }
 
 function setView(view) {
+  const leavingVault = state.view === 'vault' && view !== 'vault';
+  closeEditor();
   state.view = view;
   state.selecting = false;
   state.selected.clear();
-  closeEditor();
+  if (leavingVault && vault.unlocked) lockVault();
+  render();
+  if (view === 'vault' && !vault.unlocked) setTimeout(() => $('#vault-pw').focus(), 0);
+}
+
+// ---------------------------------------------------------------- locked notes
+
+async function lockVault() {
+  if (!vault.unlocked) return;
+  if (currentInVault()) closeEditor();
+  clearTimeout(saveTimer);
+  await api.vault.save(vault.notes);
+  vault.notes = [];
+  vault.unlocked = false;
+  await api.vault.lock();
+  if (inVaultView()) { state.selecting = false; state.selected.clear(); }
   render();
 }
+
+// Asks for the password when needed (used when moving notes in from other views).
+async function ensureVaultUnlocked() {
+  if (vault.unlocked) return true;
+  if (!vault.exists) {
+    setView('vault');
+    toast('請先設定上鎖筆記的密碼');
+    return false;
+  }
+  const pw = await openModal({ title: '輸入上鎖筆記密碼', input: '', password: true, okText: '解鎖' });
+  if (!pw) return false;
+  const notes = await api.vault.unlock(pw);
+  if (!notes) { toast('密碼錯誤'); return false; }
+  vault.notes = notes;
+  vault.unlocked = true;
+  return true;
+}
+
+async function moveToVault(ids) {
+  const wasUnlocked = vault.unlocked;
+  if (!(await ensureVaultUnlocked())) return false;
+  const moving = db.notes.filter((n) => ids.includes(n.id));
+  for (const n of moving) {
+    const html = await api.vault.importImages(n.html);
+    vault.notes.push({ ...n, html, folderId: null, starred: false, deletedAt: null });
+  }
+  db.notes = db.notes.filter((n) => !ids.includes(n.id));
+  clearTimeout(saveTimer);
+  await api.vault.save(vault.notes);
+  // Overwrite notes.json and its backup so no plaintext copy remains, then
+  // remove the now-unused plain image files.
+  await api.save(db, { scrub: true });
+  await api.cleanupImages();
+  if (!wasUnlocked && !inVaultView()) await lockVault();
+  toast(`已移到上鎖筆記（${moving.length} 則）`);
+  return true;
+}
+
+async function moveOutOfVault(ids) {
+  const moving = vault.notes.filter((n) => ids.includes(n.id));
+  for (const n of moving) {
+    const html = await api.vault.exportImages(n.html);
+    db.notes.push({ ...n, html, folderId: null, deletedAt: null });
+  }
+  vault.notes = vault.notes.filter((n) => !ids.includes(n.id));
+  await persist(true);
+  toast(`已移出上鎖筆記（${moving.length} 則），可在「所有筆記」找到`);
+}
+
+async function destroyVaultNotes(ids) {
+  const ok = await openModal({
+    title: `永久刪除 ${ids.length} 則上鎖筆記？`, text: '上鎖筆記不會進垃圾筒，刪除後無法復原。', okText: '永久刪除', danger: true,
+  });
+  if (!ok) return false;
+  vault.notes = vault.notes.filter((n) => !ids.includes(n.id));
+  await persist(true);
+  return true;
+}
+
+async function changeVaultPassword() {
+  const oldPw = await openModal({ title: '變更密碼', text: '請輸入目前的密碼', input: '', password: true, okText: '下一步' });
+  if (!oldPw) return;
+  const newPw = await openModal({ title: '變更密碼', text: '請輸入新密碼（至少 4 個字元）', input: '', password: true, okText: '下一步' });
+  if (!newPw) return;
+  if (newPw.length < 4) { toast('密碼至少 4 個字元'); return; }
+  const again = await openModal({ title: '變更密碼', text: '請再輸入一次新密碼', input: '', password: true, okText: '變更' });
+  if (again !== newPw) { toast('兩次輸入的新密碼不一樣'); return; }
+  flushEditor();
+  await persist(true);
+  toast('正在重新加密…');
+  if (await api.vault.changePassword(oldPw, newPw)) toast('密碼已變更');
+  else toast('目前的密碼錯誤，密碼沒有變更');
+}
+
+$('#vault-gate').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const pw = $('#vault-pw').value;
+  const err = $('#vault-gate-error');
+  const btn = $('#vault-gate-ok');
+  err.textContent = '';
+  if (!pw) return;
+  btn.disabled = true;
+  try {
+    if (!vault.exists) {
+      if (pw.length < 4) { err.textContent = '密碼至少 4 個字元'; return; }
+      if (pw !== $('#vault-pw2').value) { err.textContent = '兩次輸入的密碼不一樣'; return; }
+      btn.textContent = '建立中…';
+      vault.notes = await api.vault.create(pw);
+      vault.exists = true;
+    } else {
+      btn.textContent = '解鎖中…';
+      const notes = await api.vault.unlock(pw);
+      if (!notes) {
+        err.textContent = '密碼錯誤';
+        $('#vault-pw').select();
+        return;
+      }
+      vault.notes = notes;
+    }
+    vault.unlocked = true;
+    $('#vault-pw').value = '';
+    $('#vault-pw2').value = '';
+    lastActivity = Date.now();
+    render();
+  } finally {
+    btn.disabled = false;
+    renderVaultGate(inVaultView() && !vault.unlocked);
+  }
+});
+
+// Auto-lock after inactivity and whenever the window is hidden/minimized.
+let lastActivity = Date.now();
+for (const ev of ['mousedown', 'mousemove', 'keydown', 'wheel']) {
+  document.addEventListener(ev, () => { lastActivity = Date.now(); }, { capture: true, passive: true });
+}
+setInterval(() => {
+  if (vault.unlocked && Date.now() - lastActivity > VAULT_IDLE_MS) {
+    lockVault();
+    toast('閒置超過 5 分鐘，上鎖筆記已自動上鎖');
+  }
+}, 15000);
+api.onHidden(() => { if (vault.unlocked) lockVault(); });
 
 // ---------------------------------------------------------------- note operations
 
 function createNote(html = '') {
   const now = Date.now();
+  const toVault = inVaultView() && vault.unlocked;
+  if (inVaultView() && !vault.unlocked) state.view = 'all';
   const folderId = db.folders.some((f) => f.id === state.view) ? state.view : null;
   const n = {
     id: uid(), title: '', html, text: htmlToText(html), folderId,
     starred: state.view === 'starred', createdAt: now, updatedAt: now, deletedAt: null,
   };
-  db.notes.push(n);
+  (toVault ? vault.notes : db.notes).push(n);
   if (state.view === 'trash') state.view = 'all';
   persist();
   openEditor(n.id);
@@ -328,7 +514,7 @@ function createNote(html = '') {
 }
 
 async function createImageNote() {
-  const urls = await api.pickImages();
+  const urls = await api.pickImages(inVaultView() && vault.unlocked);
   if (!urls.length) return;
   createNote(urls.map((u) => `<p><img src="${u}"></p>`).join('') + '<p><br></p>');
 }
@@ -377,7 +563,15 @@ async function moveNotes(ids) {
 }
 
 function noteContextMenu(e, id) {
-  const n = db.notes.find((x) => x.id === id);
+  const n = findNote(id);
+  if (isVaultNote(n)) {
+    showContextMenu(e.clientX, e.clientY, [
+      { label: '開啟', action: () => openEditor(id) },
+      { label: '移出上鎖筆記', action: async () => { await moveOutOfVault([id]); render(); } },
+      { label: '永久刪除', danger: true, action: async () => { if (await destroyVaultNotes([id])) render(); } },
+    ]);
+    return;
+  }
   const items = n.deletedAt
     ? [
       { label: '還原', action: () => { restoreNotes([id]); render(); } },
@@ -387,6 +581,7 @@ function noteContextMenu(e, id) {
       { label: '開啟', action: () => openEditor(id) },
       { label: n.starred ? '移除最愛' : '加入我的最愛', action: () => { n.starred = !n.starred; persist(); render(); } },
       { label: '移動到資料夾…', action: async () => { if (await moveNotes([id])) render(); } },
+      { label: '🔒 移到上鎖筆記', action: async () => { if (await moveToVault([id])) render(); } },
       { label: '建立副本', action: () => {
         const now = Date.now();
         db.notes.push({ ...n, id: uid(), title: noteTitle(n) + ' (副本)', createdAt: now, updatedAt: now });
@@ -402,7 +597,7 @@ function noteContextMenu(e, id) {
 const editor = $('#editor');
 
 function openEditor(id) {
-  const n = db.notes.find((x) => x.id === id);
+  const n = findNote(id);
   if (!n) return;
   if (n.deletedAt) {
     openModal({ title: '這則筆記在垃圾筒中', text: '要還原後再編輯嗎？', okText: '還原並開啟' })
@@ -420,6 +615,10 @@ function openEditor(id) {
   for (const o of folderOptions()) sel.add(new Option(o.label, o.value));
   sel.value = n.folderId || '';
   $('#btn-star').classList.toggle('on', !!n.starred);
+  const locked = isVaultNote(n);
+  $('#vault-badge').classList.toggle('hidden', !locked);
+  for (const sel of ['#note-folder', '#btn-star', '#btn-export']) $(sel).classList.toggle('hidden', locked);
+  $('#btn-delete-note').title = locked ? '永久刪除' : '刪除筆記';
   hideImageBar();
   renderSidebar();
   if (!n.html && !n.title) editor.focus();
@@ -433,10 +632,11 @@ function openEditor(id) {
 function closeEditor() {
   if (!state.currentId) return;
   flushEditor();
-  const n = db.notes.find((x) => x.id === state.currentId);
+  const n = findNote(state.currentId);
   // Drop notes that were opened and left completely empty.
   if (n && !n.title.trim() && !n.text.trim() && !/<img/i.test(n.html)) {
     db.notes = db.notes.filter((x) => x !== n);
+    vault.notes = vault.notes.filter((x) => x !== n);
   }
   persist(true);
   state.currentId = null;
@@ -448,7 +648,7 @@ function closeEditor() {
 }
 
 function flushEditor() {
-  const n = db.notes.find((x) => x.id === state.currentId);
+  const n = findNote(state.currentId);
   if (!n) return;
   const html = editor.innerHTML;
   const title = $('#note-title').value;
@@ -518,7 +718,7 @@ async function insertImageFiles(files) {
   if (!imgs.length) return false;
   const html = [];
   for (const f of imgs) {
-    const url = await api.saveImage(await f.arrayBuffer(), f.type);
+    const url = await api.saveImage(await f.arrayBuffer(), f.type, currentInVault());
     html.push(`<img src="${url}">`);
   }
   editor.focus();
@@ -564,7 +764,7 @@ async function externalizeDataImages() {
     const m = /^data:(image\/[\w+.-]+);base64,(.*)$/.exec(img.src);
     if (!m) continue;
     const bin = Uint8Array.from(atob(m[2]), (c) => c.charCodeAt(0));
-    img.src = await api.saveImage(bin.buffer, m[1]);
+    img.src = await api.saveImage(bin.buffer, m[1], currentInVault());
   }
 }
 
@@ -731,7 +931,7 @@ $('#btn-voice').addEventListener('click', startVoice);
 $('#btn-insert-image').addEventListener('click', async () => {
   const s = getSelection();
   const saved = s.rangeCount && editor.contains(s.anchorNode) ? s.getRangeAt(0) : null;
-  const urls = await api.pickImages();
+  const urls = await api.pickImages(currentInVault());
   if (!urls.length) return;
   editor.focus();
   if (saved) { s.removeAllRanges(); s.addRange(saved); } else placeCaretAtEnd(editor);
@@ -877,13 +1077,13 @@ updateColorMarks();
 
 $('#btn-back').addEventListener('click', closeEditor);
 $('#note-folder').addEventListener('change', (e) => {
-  const n = db.notes.find((x) => x.id === state.currentId);
+  const n = findNote(state.currentId);
   n.folderId = e.target.value || null;
   persist();
   renderSidebar();
 });
 $('#btn-star').addEventListener('click', () => {
-  const n = db.notes.find((x) => x.id === state.currentId);
+  const n = findNote(state.currentId);
   n.starred = !n.starred;
   $('#btn-star').classList.toggle('on', n.starred);
   persist();
@@ -896,13 +1096,18 @@ $('#btn-on-top').addEventListener('click', async () => {
 });
 $('#btn-export').addEventListener('click', async () => {
   flushEditor();
-  const n = db.notes.find((x) => x.id === state.currentId);
+  const n = findNote(state.currentId);
+  if (isVaultNote(n)) return;
   if (await api.exportNote(noteTitle(n), n.html)) toast('已匯出');
 });
-$('#btn-delete-note').addEventListener('click', () => {
+$('#btn-delete-note').addEventListener('click', async () => {
   const id = state.currentId;
   flushEditor();
-  trashNotes([id]);
+  if (currentInVault()) {
+    if (!(await destroyVaultNotes([id]))) return;
+  } else {
+    trashNotes([id]);
+  }
   state.currentId = null;
   $('#editor-view').classList.add('hidden');
   $('#list-view').classList.remove('hidden');
@@ -956,6 +1161,10 @@ $('#sidebar').addEventListener('drop', (e) => {
   e.preventDefault();
   const ids = JSON.parse(raw);
   const v = item.dataset.view;
+  if (v === 'vault') {
+    moveToVault(ids).then(() => { state.selected.clear(); render(); });
+    return;
+  }
   if (v === 'trash') trashNotes(ids);
   else {
     for (const n of db.notes) if (ids.includes(n.id)) n.folderId = v === 'all' ? null : v;
@@ -1004,7 +1213,9 @@ $('#btn-select-all').addEventListener('click', () => {
 });
 $('#btn-sel-delete').addEventListener('click', async () => {
   const ids = [...state.selected];
-  if (state.view === 'trash') { if (!(await destroyNotes(ids))) return; } else trashNotes(ids);
+  if (state.view === 'trash') { if (!(await destroyNotes(ids))) return; }
+  else if (inVaultView()) { if (!(await destroyVaultNotes(ids))) return; }
+  else trashNotes(ids);
   state.selected.clear();
   state.selecting = false;
   render();
@@ -1021,6 +1232,20 @@ $('#btn-sel-move').addEventListener('click', async () => {
   state.selecting = false;
   render();
 });
+$('#btn-sel-vault').addEventListener('click', async () => {
+  if (!(await moveToVault([...state.selected]))) return;
+  state.selected.clear();
+  state.selecting = false;
+  render();
+});
+$('#btn-sel-unvault').addEventListener('click', async () => {
+  await moveOutOfVault([...state.selected]);
+  state.selected.clear();
+  state.selecting = false;
+  render();
+});
+$('#btn-vault-lock').addEventListener('click', () => { lockVault(); toast('已上鎖'); });
+$('#btn-vault-password').addEventListener('click', changeVaultPassword);
 $('#btn-empty-trash').addEventListener('click', async () => {
   const ids = db.notes.filter((n) => n.deletedAt).map((n) => n.id);
   if (ids.length && (await destroyNotes(ids))) render();
@@ -1083,7 +1308,7 @@ document.addEventListener('paste', async (e) => {
   e.preventDefault();
   if (files.length) {
     const urls = [];
-    for (const f of files) urls.push(await api.saveImage(await f.arrayBuffer(), f.type));
+    for (const f of files) urls.push(await api.saveImage(await f.arrayBuffer(), f.type, inVaultView() && vault.unlocked));
     createNote(urls.map((u) => `<p><img src="${u}"></p>`).join('') + '<p><br></p>');
   } else {
     createNote(escapeHtml(text).split('\n').map((l) => `<div>${l || '<br>'}</div>`).join(''));
@@ -1100,6 +1325,7 @@ api.onNewNote(() => { if (state.currentId) closeEditor(); createNote(); });
   db = await api.load();
   db.folders ||= [];
   db.notes ||= [];
+  vault.exists = (await api.vault.status()).exists;
   if (purgeOldTrash()) { await persist(true); api.cleanupImages(); }
   render();
 })();

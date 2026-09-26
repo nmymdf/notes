@@ -30,6 +30,9 @@
     <symbol id="i-restore" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></symbol>
     <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
     <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
+    <symbol id="i-unlock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3M18 5l2 2"/></symbol>
     <symbol id="i-move" viewBox="0 0 24 24"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M10 13h6M13 10l3 3-3 3"/></symbol>
   </svg>
 
@@ -41,6 +44,7 @@
         <a class="nav-item" data-view="all"><svg><use href="#i-notes"/></svg><span>所有筆記</span><em id="count-all"></em></a>
         <a class="nav-item" data-view="starred"><svg><use href="#i-star"/></svg><span>我的最愛</span><em id="count-starred"></em></a>
         <a class="nav-item" data-view="trash"><svg><use href="#i-trash"/></svg><span>垃圾筒</span><em id="count-trash"></em></a>
+        <a class="nav-item" data-view="vault"><svg><use href="#i-lock"/></svg><span>上鎖筆記</span><em id="count-vault"></em></a>
         <hr>
         <div class="nav-section">
           <span><svg><use href="#i-folder"/></svg>資料夾</span>
@@ -61,12 +65,16 @@
           <button class="text-btn" id="btn-new-image-note"><svg><use href="#i-image"/></svg>匯入圖片</button>
           <button class="text-btn" id="btn-select-mode"><svg><use href="#i-check-circle"/></svg>編輯</button>
           <button class="text-btn" id="btn-view-mode"><svg><use href="#i-grid"/></svg><span>檢視</span></button>
+          <button class="icon-btn hidden" id="btn-vault-password" title="變更上鎖筆記密碼"><svg><use href="#i-key"/></svg></button>
+          <button class="text-btn hidden" id="btn-vault-lock"><svg><use href="#i-lock"/></svg>立即上鎖</button>
           <button class="text-btn danger hidden" id="btn-empty-trash"><svg><use href="#i-trash"/></svg>清空垃圾筒</button>
         </div>
         <div class="actions hidden" id="select-actions">
           <span id="select-count">已選取 0 則</span>
           <button class="text-btn" id="btn-select-all">全選</button>
           <button class="text-btn" id="btn-sel-move"><svg><use href="#i-move"/></svg>移動</button>
+          <button class="text-btn" id="btn-sel-vault"><svg><use href="#i-lock"/></svg>上鎖</button>
+          <button class="text-btn" id="btn-sel-unvault"><svg><use href="#i-unlock"/></svg>移出上鎖</button>
           <button class="text-btn" id="btn-sel-restore"><svg><use href="#i-restore"/></svg>還原</button>
           <button class="text-btn danger" id="btn-sel-delete"><svg><use href="#i-trash"/></svg>刪除</button>
           <button class="text-btn" id="btn-select-done">完成</button>
@@ -88,6 +96,15 @@
       </div>
       <section id="notes" class="grid"></section>
       <div id="empty" class="empty hidden"></div>
+      <form id="vault-gate" class="vault-gate hidden" autocomplete="off">
+        <svg class="big"><use href="#i-lock"/></svg>
+        <h2 id="vault-gate-title">上鎖筆記</h2>
+        <p id="vault-gate-text"></p>
+        <input type="password" id="vault-pw" placeholder="密碼">
+        <input type="password" id="vault-pw2" placeholder="再輸入一次密碼">
+        <div id="vault-gate-error" class="gate-error"></div>
+        <button type="submit" class="text-btn primary" id="vault-gate-ok">解鎖</button>
+      </form>
     </main>
 
     <!-- ================= Editor view ================= -->
@@ -95,6 +112,7 @@
       <header class="editor-top">
         <button class="icon-btn" id="btn-back" title="返回 (Esc)"><svg><use href="#i-back"/></svg></button>
         <input id="note-title" placeholder="標題" maxlength="200">
+        <span id="vault-badge" class="vault-badge hidden"><svg><use href="#i-lock"/></svg>已加密</span>
         <span id="save-state"></span>
         <select id="note-folder" title="資料夾"></select>
         <button class="icon-btn" id="btn-star" title="加入我的最愛"><svg><use href="#i-star"/></svg></button>

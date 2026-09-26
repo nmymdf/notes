@@ -72,12 +72,12 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 /* ---------- list view ---------- */
 #list-view, #editor-view { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .topbar { display: flex; align-items: center; gap: 12px; padding: 18px 28px 6px 44px; }
-.topbar h1 { font-size: 30px; margin: 0 auto 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.topbar h1 { flex: none; max-width: 30%; font-size: 30px; margin: 0 auto 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .actions { display: flex; align-items: center; gap: 4px; }
 #select-count { color: var(--muted); margin-right: 8px; }
 .search {
   display: flex; align-items: center; background: #2a2a2a; border-radius: 22px;
-  padding: 0 14px 0 20px; height: 44px; width: 240px;
+  padding: 0 14px 0 20px; height: 44px; flex: 0 1 240px; min-width: 120px;
 }
 .search input { flex: 1; min-width: 0; background: none; border: 0; outline: none; font-size: 16px; }
 .search svg { width: 20px; height: 20px; color: #ccc; }
@@ -129,6 +129,21 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 #notes.grid .note-card .meta .line { display: none; }
 #notes.list .note-card .check { position: static; flex: none; }
 
+.vault-gate {
+  margin: 12vh auto 0; width: 340px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 12px;
+}
+.vault-gate .big { width: 64px; height: 64px; color: var(--accent); stroke-width: 1.4; }
+.vault-gate h2 { margin: 0; font-size: 24px; }
+.vault-gate p { margin: 0; color: var(--muted); line-height: 1.6; font-size: 14px; white-space: pre-line; }
+.vault-gate input {
+  width: 100%; background: #1a1a1a; border: 1px solid #444; border-radius: 10px; padding: 11px 14px; outline: none; font-size: 16px;
+}
+.vault-gate input:focus { border-color: var(--accent); }
+.vault-gate .primary { width: 100%; justify-content: center; padding: 11px; }
+.gate-error { color: var(--danger); min-height: 1.2em; font-size: 14px; }
+.vault-badge { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); font-size: 13px; white-space: nowrap; }
+.vault-badge svg { width: 16px; height: 16px; }
+.nav-item[data-view="vault"] svg { color: var(--accent); }
 .empty { color: var(--muted); text-align: center; margin-top: 18vh; font-size: 18px; line-height: 2; }
 
 /* ---------- editor ---------- */
@@ -251,7 +266,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 ::-webkit-scrollbar-thumb { background: #333; border-radius: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 
-@media (max-width: 1100px) {
+@media (max-width: 1250px) {
   .text-btn { font-size: 0; gap: 0; }
   .text-btn svg { width: 22px; height: 22px; }
   #select-actions .text-btn:not(:has(svg)) { font-size: 15px; }
