@@ -38,7 +38,11 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "shortcutName": "DeskNotes"
+      "shortcutName": "DeskNotes",
+      "artifactName": "DeskNotes-Setup.exe"
+    },
+    "portable": {
+      "artifactName": "DeskNotes.exe"
     }
   }
 }

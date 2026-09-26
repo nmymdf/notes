@@ -24,14 +24,12 @@
 | Ctrl + 點卡片 | 多選 |
 | Esc | 返回列表 |
 
-## 下載安裝檔（不用自己編譯）
+## 下載（不用自己編譯）
 
-每次推送到 GitHub，Actions 會自動在 Windows 上建置：
+- 免安裝版（點兩下就能用）：<https://github.com/nmymdf/notes/releases/latest/download/DeskNotes.exe>
+- 安裝版：<https://github.com/nmymdf/notes/releases/latest/download/DeskNotes-Setup.exe>
 
-1. 打開 GitHub 專案的 **Actions** 分頁 → 點最新一次 **Build Windows app**
-2. 下方 **Artifacts** 下載 `DeskNotes-windows`，解壓後有兩個檔：
-   - `DeskNotes Setup x.x.x.exe`：安裝版（有桌面捷徑、開始功能表）
-   - `DeskNotes x.x.x.exe`：免安裝版，點兩下就能用
+每次推送程式碼，GitHub Actions 會自動在 Windows 上重新建置並更新上面的連結。
 
 > 因為沒有程式碼簽章，第一次執行 Windows SmartScreen 可能會警告，按「其他資訊」→「仍要執行」即可。
 
