@@ -1,0 +1,44 @@
+{
+  "name": "desk-notes",
+  "productName": "DeskNotes",
+  "version": "1.0.0",
+  "description": "Windows 桌面筆記：隨時記事、貼圖、資料夾、搜尋、垃圾筒",
+  "main": "src/main.js",
+  "author": "nmymdf",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win",
+    "dist:portable": "electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "^44.4.5",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "com.nmymdf.desknotes",
+    "productName": "DeskNotes",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "build/icon.png",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "DeskNotes"
+    }
+  }
+}
