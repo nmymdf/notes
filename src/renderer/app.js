@@ -1184,6 +1184,52 @@ $('#btn-toggle-sidebar').addEventListener('click', () => {
   renderSidebar();
 });
 
+// ----- Outlook 2010 notes (CSV export) → one DeskNotes note per Outlook note
+
+function textToHtml(text) {
+  return text.split('\n').map((l) => `<div>${l ? escapeHtml(l) : '<br>'}</div>`).join('');
+}
+
+async function importOutlook() {
+  const res = await api.importOutlook();
+  if (!res) return;
+  if (!res.notes.length) {
+    openModal({ title: '找不到記事', text: `「${res.file}」裡沒有可匯入的記事。請確認是從 Outlook 的「記事」資料夾匯出的 CSV 檔。`, okText: '知道了' });
+    return;
+  }
+  const FOLDER = 'Outlook 記事';
+  const existing = new Set(db.notes.filter((n) => !n.deletedAt).map((n) => n.title + '\u0000' + n.text));
+  const fresh = res.notes.filter((o) => !existing.has(o.title + '\u0000' + htmlToText(textToHtml(o.body))));
+  const skipped = res.notes.length - fresh.length;
+  const ok = await openModal({
+    title: `找到 ${res.notes.length} 則 Outlook 記事`,
+    text: `將匯入到資料夾「${FOLDER}」，每則記事成為一則筆記。`
+      + (skipped ? `\n其中 ${skipped} 則已經匯入過，會自動略過。` : ''),
+    okText: fresh.length ? `匯入 ${fresh.length} 則` : '確定',
+  });
+  if (!ok || !fresh.length) return;
+
+  let folder = db.folders.find((f) => f.name === FOLDER);
+  if (!folder) {
+    folder = { id: uid(), name: FOLDER, createdAt: Date.now() };
+    db.folders.push(folder);
+  }
+  // CSV has no dates; keep the file's order under the default "newest first" sort.
+  const now = Date.now();
+  fresh.forEach((o, i) => {
+    const html = textToHtml(o.body);
+    const ts = now - i;
+    db.notes.push({
+      id: uid(), title: o.title, html, text: htmlToText(html), folderId: folder.id,
+      starred: false, createdAt: ts, updatedAt: ts, deletedAt: null,
+    });
+  });
+  await persist(true);
+  setView(folder.id);
+  toast(`已匯入 ${fresh.length} 則 Outlook 記事`);
+}
+$('#btn-import-outlook').addEventListener('click', importOutlook);
+
 $('#btn-new-note').addEventListener('click', () => createNote());
 $('#btn-new-image-note').addEventListener('click', createImageNote);
 $('#btn-new-voice-note').addEventListener('click', () => { createNote(); startVoice(); });

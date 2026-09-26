@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const { pathToFileURL } = require('url');
 const { execFile } = require('child_process');
 const { Vault } = require('./vault');
+const { parseOutlookNotesCsv } = require('./outlook-import');
 
 const IMG_SCHEME = 'note-img';
 const QUICK_NOTE_SHORTCUT = 'CommandOrControl+Alt+N';
@@ -209,6 +210,17 @@ function registerIpc() {
       return plain ? saveImage(plain, mimeOf(file)) : all;
     },
   ));
+
+  ipcMain.handle('import:outlook', async () => {
+    const res = await dialog.showOpenDialog(mainWindow, {
+      title: '選擇 Outlook 匯出的記事 CSV 檔',
+      properties: ['openFile'],
+      filters: [{ name: 'CSV（逗點分隔值）', extensions: ['csv'] }],
+    });
+    if (res.canceled || !res.filePaths.length) return null;
+    const file = res.filePaths[0];
+    return { file: path.basename(file), notes: parseOutlookNotesCsv(fs.readFileSync(file)) };
+  });
 
   ipcMain.handle('note:export', async (_e, { title, html }) => {
     const safe = (title || '未命名筆記').replace(/[\\/:*?"<>|]/g, '_');

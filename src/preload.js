@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('notesAPI', {
     importImages: (html) => ipcRenderer.invoke('vault:import-images', html),
     exportImages: (html) => ipcRenderer.invoke('vault:export-images', html),
   },
+  importOutlook: () => ipcRenderer.invoke('import:outlook'),
   exportNote: (title, html) => ipcRenderer.invoke('note:export', { title, html }),
   startVoice: () => ipcRenderer.invoke('voice:start'),
   toggleOnTop: () => ipcRenderer.invoke('window:toggle-on-top'),

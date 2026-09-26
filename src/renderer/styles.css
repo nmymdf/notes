@@ -48,6 +48,13 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .nav-section svg { width: 18px; height: 18px; }
 #folder-list .nav-item { padding-left: 22px; font-size: 16px; }
 #folder-list .nav-item svg { width: 20px; height: 20px; }
+.import-btn {
+  display: flex; align-items: center; gap: 14px; padding: 10px 12px; border-radius: 10px; cursor: pointer;
+  background: none; border: 0; width: 100%; font-size: 15px; color: var(--muted); text-align: left;
+}
+.import-btn:hover { background: var(--panel-2); color: var(--text); }
+.import-btn svg { width: 20px; height: 20px; }
+#sidebar.collapsed .import-btn span { display: none; }
 .sidebar-foot { color: #666; font-size: 12px; padding: 8px 12px 0; }
 
 /* ---------- common buttons ---------- */
@@ -239,7 +246,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .modal { position: fixed; inset: 0; background: #0009; display: flex; align-items: center; justify-content: center; z-index: 100; }
 .modal-box { background: var(--panel-2); border-radius: 14px; padding: 22px 24px 16px; width: 380px; box-shadow: 0 10px 40px #000; }
 .modal-box h3 { margin: 0 0 10px; }
-.modal-box p { margin: 0 0 12px; color: #ccc; line-height: 1.5; }
+.modal-box p { margin: 0 0 12px; color: #ccc; line-height: 1.5; white-space: pre-line; }
 .modal-box input, .modal-box select {
   width: 100%; background: #111; border: 1px solid #444; border-radius: 8px; padding: 9px 12px; outline: none; margin-bottom: 8px;
 }
