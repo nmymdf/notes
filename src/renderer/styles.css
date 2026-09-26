@@ -151,6 +151,8 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .toolbar button:hover, .toolbar .color:hover, .toolbar button.active { background: var(--panel-2); }
 .toolbar button.active { color: var(--accent); }
 .toolbar svg { width: 20px; height: 20px; }
+.toolbar .voice { gap: 6px; font-size: 15px; }
+.toolbar .voice svg { color: var(--accent); }
 .toolbar > i { width: 1px; height: 22px; background: var(--line); margin: 0 6px; }
 .toolbar .it { font-family: Georgia, serif; }
 .toolbar .color span { font-weight: 700; border-bottom: 3px solid #ff5252; line-height: 1.1; }

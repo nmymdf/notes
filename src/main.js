@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { pathToFileURL } = require('url');
+const { execFile } = require('child_process');
 
 const IMG_SCHEME = 'note-img';
 const QUICK_NOTE_SHORTCUT = 'CommandOrControl+Alt+N';
@@ -203,6 +204,23 @@ function registerIpc() {
 
   ipcMain.handle('edit:cmd', (e, cmd) => {
     if (['cut', 'copy', 'paste', 'selectAll', 'undo', 'redo'].includes(cmd)) e.sender[cmd]();
+  });
+
+  // Voice input uses Windows' built-in voice typing (Win+H), which types the
+  // recognized speech into whatever has focus, i.e. the note editor.
+  ipcMain.handle('voice:start', () => {
+    if (process.platform !== 'win32') return false;
+    const script = `
+Add-Type -Namespace W -Name K -MemberDefinition '[DllImport("user32.dll")] public static extern void keybd_event(byte b, byte s, uint f, UIntPtr e);'
+[W.K]::keybd_event(0x5B, 0, 0, [UIntPtr]::Zero)
+[W.K]::keybd_event(0x48, 0, 0, [UIntPtr]::Zero)
+[W.K]::keybd_event(0x48, 0, 2, [UIntPtr]::Zero)
+[W.K]::keybd_event(0x5B, 0, 2, [UIntPtr]::Zero)`;
+    const encoded = Buffer.from(script, 'utf16le').toString('base64');
+    return new Promise((resolve) => {
+      execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', encoded],
+        { windowsHide: true }, (err) => resolve(!err));
+    });
   });
 
   ipcMain.handle('window:toggle-on-top', () => {

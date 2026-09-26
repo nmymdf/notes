@@ -245,6 +245,7 @@ function renderList() {
   $('#btn-empty-trash').classList.toggle('hidden', !inTrash || state.selecting);
   $('#btn-new-note').classList.toggle('hidden', inTrash);
   $('#btn-new-image-note').classList.toggle('hidden', inTrash);
+  $('#btn-new-voice-note').classList.toggle('hidden', inTrash);
   $('#normal-actions').classList.toggle('hidden', state.selecting);
   $('#select-actions').classList.toggle('hidden', !state.selecting);
   $('#btn-sel-restore').classList.toggle('hidden', !inTrash);
@@ -716,6 +717,16 @@ $('#toolbar').addEventListener('click', (e) => {
 });
 $('#btn-checklist').addEventListener('click', insertChecklist);
 $('#btn-insert-hr').addEventListener('click', () => exec('insertHorizontalRule'));
+
+async function startVoice() {
+  hideImageBar();
+  editor.focus();
+  const s = getSelection();
+  if (!s.rangeCount || !editor.contains(s.anchorNode)) placeCaretAtEnd(editor);
+  toast('啟動語音輸入…開始說話，再按一次 Win+H 停止');
+  if (!(await api.startVoice())) toast('無法啟動語音輸入，請直接按 Win+H');
+}
+$('#btn-voice').addEventListener('click', startVoice);
 $('#btn-insert-image').addEventListener('click', async () => {
   const s = getSelection();
   const saved = s.rangeCount && editor.contains(s.anchorNode) ? s.getRangeAt(0) : null;
@@ -863,6 +874,7 @@ $('#btn-toggle-sidebar').addEventListener('click', () => {
 
 $('#btn-new-note').addEventListener('click', () => createNote());
 $('#btn-new-image-note').addEventListener('click', createImageNote);
+$('#btn-new-voice-note').addEventListener('click', () => { createNote(); startVoice(); });
 $('#btn-select-mode').addEventListener('click', () => { state.selecting = true; state.selected.clear(); renderList(); });
 $('#btn-select-done').addEventListener('click', () => { state.selecting = false; state.selected.clear(); renderList(); });
 $('#btn-select-all').addEventListener('click', () => {
@@ -925,6 +937,12 @@ document.addEventListener('keydown', (e) => {
     else if (state.search) { $('#search').value = ''; state.search = ''; renderList(); }
   }
   if (e.ctrlKey && !e.altKey && e.key.toLowerCase() === 'n') { e.preventDefault(); if (inEditor) closeEditor(); createNote(); }
+  if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'm') {
+    e.preventDefault();
+    if (!inEditor) createNote();
+    startVoice();
+    return;
+  }
   if (e.ctrlKey && e.key.toLowerCase() === 'f') {
     e.preventDefault();
     if (inEditor) closeEditor();
