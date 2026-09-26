@@ -10,7 +10,6 @@ const PREFS_KEY = 'desknotes.prefs';
 let db = { version: 1, folders: [], notes: [] };
 // Locked notes: decrypted copies live here only while the vault is unlocked.
 const vault = { exists: false, unlocked: false, notes: [] };
-const VAULT_IDLE_MS = 5 * 60 * 1000;
 const state = {
   view: 'all',              // 'all' | 'starred' | 'trash' | folder id
   search: '',
@@ -349,12 +348,10 @@ function render() {
 }
 
 function setView(view) {
-  const leavingVault = state.view === 'vault' && view !== 'vault';
   closeEditor();
   state.view = view;
   state.selecting = false;
   state.selected.clear();
-  if (leavingVault && vault.unlocked) lockVault();
   render();
   if (view === 'vault' && !vault.unlocked) setTimeout(() => $('#vault-pw').focus(), 0);
 }
@@ -391,7 +388,6 @@ async function ensureVaultUnlocked() {
 }
 
 async function moveToVault(ids) {
-  const wasUnlocked = vault.unlocked;
   if (!(await ensureVaultUnlocked())) return false;
   const moving = db.notes.filter((n) => ids.includes(n.id));
   for (const n of moving) {
@@ -405,7 +401,6 @@ async function moveToVault(ids) {
   // remove the now-unused plain image files.
   await api.save(db, { scrub: true });
   await api.cleanupImages();
-  if (!wasUnlocked && !inVaultView()) await lockVault();
   toast(`已移到上鎖筆記（${moving.length} 則）`);
   return true;
 }
@@ -474,7 +469,6 @@ $('#vault-gate').addEventListener('submit', async (e) => {
     vault.unlocked = true;
     $('#vault-pw').value = '';
     $('#vault-pw2').value = '';
-    lastActivity = Date.now();
     render();
   } finally {
     btn.disabled = false;
@@ -482,18 +476,8 @@ $('#vault-gate').addEventListener('submit', async (e) => {
   }
 });
 
-// Auto-lock after inactivity and whenever the window is hidden/minimized.
-let lastActivity = Date.now();
-for (const ev of ['mousedown', 'mousemove', 'keydown', 'wheel']) {
-  document.addEventListener(ev, () => { lastActivity = Date.now(); }, { capture: true, passive: true });
-}
-setInterval(() => {
-  if (vault.unlocked && Date.now() - lastActivity > VAULT_IDLE_MS) {
-    lockVault();
-    toast('閒置超過 5 分鐘，上鎖筆記已自動上鎖');
-  }
-}, 15000);
-api.onHidden(() => { if (vault.unlocked) lockVault(); });
+// Once unlocked, locked notes stay open until 「立即上鎖」 or DeskNotes is quit
+// (the key only exists in memory, so quitting always locks).
 
 // ---------------------------------------------------------------- note operations
 

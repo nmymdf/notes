@@ -24,6 +24,5 @@ contextBridge.exposeInMainWorld('notesAPI', {
     await cb();
     ipcRenderer.send('app:flushed');
   }),
-  onHidden: (cb) => ipcRenderer.on('app:hidden', () => cb()),
   onNewNote: (cb) => ipcRenderer.on('app:new-note', () => cb()),
 });

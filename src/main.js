@@ -122,10 +122,6 @@ function createWindow() {
       mainWindow.hide();
     }
   });
-  // Locked notes lock again whenever the window goes away.
-  const notifyHidden = () => mainWindow.webContents.send('app:hidden');
-  mainWindow.on('hide', notifyHidden);
-  mainWindow.on('minimize', notifyHidden);
 }
 
 function showWindow() {
@@ -311,6 +307,10 @@ if (!app.requestSingleInstanceLock()) {
     mainWindow.webContents.send('app:flush');
     setTimeout(done, 1500);
   });
-  app.on('will-quit', () => globalShortcut.unregisterAll());
+  app.on('will-quit', () => {
+    globalShortcut.unregisterAll();
+    // Quitting always locks; this also removes unused encrypted images.
+    if (vault) vault.lock();
+  });
   app.on('window-all-closed', () => {});
 }
