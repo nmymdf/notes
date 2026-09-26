@@ -87,7 +87,7 @@ function createWindow() {
     minHeight: 480,
     show: false,
     backgroundColor: '#000000',
-    title: 'DeskNotes',
+    title: 'DeskNotes  —  designer: ArchieKuo',
     icon: path.join(__dirname, '..', 'build', 'icon.png'),
     autoHideMenuBar: true,
     webPreferences: {
