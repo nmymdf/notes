@@ -114,8 +114,14 @@
         <button data-cmd="italic" title="斜體 (Ctrl+I)"><i class="it">I</i></button>
         <button data-cmd="underline" title="底線 (Ctrl+U)"><u>U</u></button>
         <button data-cmd="strikeThrough" title="刪除線"><s>S</s></button>
-        <label class="color" title="文字顏色"><span>A</span><input type="color" id="fore-color" value="#ff5252"></label>
-        <label class="color hl" title="螢光筆"><span>▍</span><input type="color" id="hilite-color" value="#665c00"></label>
+        <span class="split">
+          <button class="apply" data-color-apply="fore" title="文字顏色（套用目前顏色）"><span class="color-mark" id="mark-fore">A</span></button>
+          <button class="arrow" data-color-menu="fore" title="選擇文字顏色">▾</button>
+        </span>
+        <span class="split">
+          <button class="apply" data-color-apply="hilite" title="螢光筆（套用目前顏色）"><span class="color-mark hl" id="mark-hilite">ab</span></button>
+          <button class="arrow" data-color-menu="hilite" title="選擇螢光筆顏色">▾</button>
+        </span>
         <button data-cmd="removeFormat" title="清除格式">⨯</button>
         <i></i>
         <button data-cmd="insertUnorderedList" title="項目符號">•≡</button>
@@ -131,6 +137,14 @@
       </div>
       <div class="editor-scroll">
         <div id="editor" contenteditable="true" spellcheck="false" data-placeholder="開始記事… 可直接 Ctrl+V 貼上截圖或拖曳圖片進來"></div>
+      </div>
+      <div id="color-palette" class="palette hidden">
+        <div class="palette-title"></div>
+        <button class="palette-none" data-color="">
+          <span class="swatch none"></span><span class="none-label"></span>
+        </button>
+        <div class="swatches"></div>
+        <label class="palette-custom">自訂顏色…<input type="color" id="custom-color"></label>
       </div>
       <div id="img-bar" class="img-bar hidden">
         <button data-w="25">25%</button>

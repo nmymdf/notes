@@ -441,6 +441,7 @@ function closeEditor() {
   persist(true);
   state.currentId = null;
   hideImageBar();
+  closePalette();
   $('#editor-view').classList.add('hidden');
   $('#list-view').classList.remove('hidden');
   render();
@@ -738,23 +739,141 @@ $('#btn-insert-image').addEventListener('click', async () => {
   onEdited();
 });
 
+// ----- text color / highlight: one click applies the current color,
+// the ▾ opens an in-app palette (with "none" to remove the color).
+
+const COLOR_KINDS = {
+  fore: {
+    cmd: 'foreColor', prop: 'color', title: '文字顏色', noneLabel: '預設顏色（移除文字顏色）',
+    colors: ['#ff5252', '#ff9800', '#ffeb3b', '#66bb6a', '#26c6da', '#42a5f5',
+      '#7e57c2', '#ec407a', '#bdbdbd', '#8d6e63', '#ffffff', '#757575'],
+  },
+  hilite: {
+    cmd: 'hiliteColor', prop: 'background-color', title: '螢光筆', noneLabel: '無螢光（移除螢光筆）',
+    colors: ['#665c00', '#7a4a00', '#7f1d1d', '#1b5e20', '#004d40', '#0d47a1',
+      '#4a148c', '#880e4f', '#3e2723', '#37474f', '#424242', '#1a237e'],
+  },
+};
+const currentColor = { fore: '#ff5252', hilite: '#665c00' };
+// Temporary marker color used to find and strip color from the selection.
+const MARKER = '#010203';
+const MARKER_RGB = 'rgb(1, 2, 3)';
 let savedColorRange = null;
-for (const id of ['fore-color', 'hilite-color']) {
-  const input = $('#' + id);
-  input.addEventListener('mousedown', () => {
-    const s = getSelection();
-    savedColorRange = s.rangeCount && editor.contains(s.anchorNode) ? s.getRangeAt(0).cloneRange() : null;
-  });
-  input.addEventListener('input', () => {
-    input.previousElementSibling.style.borderBottomColor = input.value;
-  });
-  input.addEventListener('change', () => {
-    if (!savedColorRange) return;
-    editor.focus();
-    const s = getSelection(); s.removeAllRanges(); s.addRange(savedColorRange);
-    exec(id === 'fore-color' ? 'foreColor' : 'hiliteColor', input.value);
-  });
+
+try { Object.assign(currentColor, JSON.parse(localStorage.getItem('desknotes.colors') || '{}')); } catch { /* ignore */ }
+
+function updateColorMarks() {
+  $('#mark-fore').style.borderBottomColor = currentColor.fore;
+  $('#mark-hilite').style.background = currentColor.hilite;
 }
+
+function saveEditorRange() {
+  const s = getSelection();
+  savedColorRange = s.rangeCount && editor.contains(s.anchorNode) ? s.getRangeAt(0).cloneRange() : null;
+}
+
+function restoreEditorRange() {
+  if (!savedColorRange) return false;
+  editor.focus();
+  const s = getSelection();
+  s.removeAllRanges();
+  s.addRange(savedColorRange);
+  return true;
+}
+
+function stripMarker(prop) {
+  for (const el of editor.querySelectorAll('font[color], [style]')) {
+    if (prop === 'color' && el.tagName === 'FONT' && el.getAttribute('color').toLowerCase() === MARKER) {
+      el.removeAttribute('color');
+    }
+    if (el.style && el.style.getPropertyValue(prop) === MARKER_RGB) {
+      el.style.removeProperty(prop);
+      if (!el.getAttribute('style')) el.removeAttribute('style');
+    }
+    if ((el.tagName === 'FONT' || el.tagName === 'SPAN') && !el.attributes.length) el.replaceWith(...el.childNodes);
+  }
+}
+
+function applyColor(kind, color) {
+  const k = COLOR_KINDS[kind];
+  const s = getSelection();
+  if (!s.rangeCount || !editor.contains(s.anchorNode)) return;
+  if (s.isCollapsed) { toast('請先選取要上色的文字'); return; }
+  document.execCommand('styleWithCSS', false, kind === 'hilite');
+  if (color) {
+    document.execCommand(k.cmd, false, color);
+  } else {
+    document.execCommand(k.cmd, false, MARKER);
+    stripMarker(k.prop);
+  }
+  document.execCommand('styleWithCSS', false, false);
+  onEdited();
+}
+
+function openPalette(kind, anchor) {
+  const k = COLOR_KINDS[kind];
+  const pal = $('#color-palette');
+  pal.dataset.kind = kind;
+  pal.querySelector('.palette-title').textContent = k.title;
+  pal.querySelector('.none-label').textContent = k.noneLabel;
+  const sw = pal.querySelector('.swatches');
+  sw.innerHTML = '';
+  for (const c of k.colors) {
+    const b = document.createElement('button');
+    b.className = 'swatch' + (c === currentColor[kind] ? ' current' : '');
+    b.style.background = c;
+    b.dataset.color = c;
+    b.title = c;
+    sw.appendChild(b);
+  }
+  $('#custom-color').value = currentColor[kind];
+  pal.classList.remove('hidden');
+  const r = anchor.getBoundingClientRect();
+  const pr = pal.getBoundingClientRect();
+  pal.style.left = Math.max(8, Math.min(r.left - 30, innerWidth - pr.width - 8)) + 'px';
+  pal.style.top = r.bottom + 6 + 'px';
+}
+
+function closePalette() { $('#color-palette').classList.add('hidden'); }
+
+function pickColor(kind, color) {
+  if (color) {
+    currentColor[kind] = color;
+    try { localStorage.setItem('desknotes.colors', JSON.stringify(currentColor)); } catch { /* ignore */ }
+    updateColorMarks();
+  }
+  if (restoreEditorRange()) applyColor(kind, color);
+}
+
+$('#toolbar').addEventListener('click', (e) => {
+  const apply = e.target.closest('[data-color-apply]');
+  const menu = e.target.closest('[data-color-menu]');
+  if (apply) {
+    closePalette();
+    applyColor(apply.dataset.colorApply, currentColor[apply.dataset.colorApply]);
+  } else if (menu) {
+    const pal = $('#color-palette');
+    if (!pal.classList.contains('hidden') && pal.dataset.kind === menu.dataset.colorMenu) { closePalette(); return; }
+    saveEditorRange();
+    openPalette(menu.dataset.colorMenu, menu);
+  }
+});
+const palette = $('#color-palette');
+palette.addEventListener('mousedown', (e) => { if (e.target.id !== 'custom-color') e.preventDefault(); });
+palette.addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-color]');
+  if (!b) return;
+  closePalette();
+  pickColor(palette.dataset.kind, b.dataset.color || null);
+});
+$('#custom-color').addEventListener('change', (e) => {
+  closePalette();
+  pickColor(palette.dataset.kind, e.target.value);
+});
+document.addEventListener('mousedown', (e) => {
+  if (!e.target.closest('#color-palette, [data-color-menu]')) closePalette();
+});
+updateColorMarks();
 
 $('#btn-back').addEventListener('click', closeEditor);
 $('#note-folder').addEventListener('change', (e) => {
@@ -929,6 +1048,7 @@ document.addEventListener('keydown', (e) => {
   if (!$('#modal').classList.contains('hidden')) return;
   const inEditor = !!state.currentId;
   if (e.key === 'Escape') {
+    if (!$('#color-palette').classList.contains('hidden')) { closePalette(); return; }
     if (!$('#lightbox').classList.contains('hidden')) { $('#lightbox').classList.add('hidden'); return; }
     hideContextMenu();
     if (selectedImg) { hideImageBar(); return; }
