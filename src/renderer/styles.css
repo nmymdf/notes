@@ -400,7 +400,9 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .context-menu button:hover { background: #3a3a3a; }
 .context-menu button.danger { color: var(--danger); }
 
-.lightbox { position: fixed; inset: 0; background: #000e; display: flex; align-items: center; justify-content: center; z-index: 110; cursor: zoom-out; }
+.lightbox { position: fixed; inset: 0; background: #000e; display: flex; align-items: center; justify-content: center; z-index: 110; }
+.lightbox .lb-btn { cursor: pointer; }
+html:not(.mobile) .lightbox img { cursor: grab; }
 /* drawing editor (drawing.js); below .modal so the text tool's dialog shows on top */
 .draw-view { position: fixed; inset: 0; z-index: 98; background: #0c0c0c; display: flex; flex-direction: column; }
 .draw-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line); }

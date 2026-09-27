@@ -1701,6 +1701,35 @@ function makeZoomable(box) {
     }
     apply();
   }
+  // Computer: mouse wheel (with or without Ctrl) zooms around the pointer,
+  // dragging moves the picture.
+  box.addEventListener('wheel', (e) => {
+    if (!img) return;
+    e.preventDefault();
+    ensureFit();
+    const r = box.getBoundingClientRect();
+    zoomAt(s * Math.exp(-e.deltaY * 0.002), e.clientX - r.left - r.width / 2, e.clientY - r.top - r.height / 2);
+    apply();
+  }, { passive: false });
+  let drag = null;
+  box.addEventListener('mousedown', (e) => {
+    if (!img || e.button !== 0 || e.target.closest('button')) return;
+    e.preventDefault();
+    drag = { cx: e.clientX, cy: e.clientY, x, y };
+    moved = false;
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.cx;
+    const dy = e.clientY - drag.cy;
+    if (Math.hypot(dx, dy) > 4) moved = true;
+    x = drag.x + dx;
+    y = drag.y + dy;
+    clamp();
+    apply();
+  });
+  window.addEventListener('mouseup', () => { drag = null; });
+
   // ＋ / － buttons: always work, even without gestures.
   box.querySelectorAll('[data-zoom]').forEach((b) => b.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -1716,6 +1745,14 @@ function makeZoomable(box) {
     pinchFrom(touches) { ensureFit(); setTouches(touches); startGesture(); },
     pinchTo(touches) { if (!gesture) return; ensureFit(); setTouches(touches); if (pts.size >= 2) update(); },
     pinchEnd() { pts.clear(); gesture = null; },
+    zoomBy(k, cx, cy) {
+      ensureFit();
+      const r = box.getBoundingClientRect();
+      zoomAt(s * k, cx - r.left - r.width / 2, cy - r.top - r.height / 2);
+      apply();
+    },
+    zoomed: () => s > 1.02,
+    dragged: () => moved,
     show(el) {
       img = el;
       pts.clear();
@@ -1730,7 +1767,7 @@ function makeZoomable(box) {
     },
   };
 }
-const lightboxZoom = IS_MOBILE ? makeZoomable($('#lightbox')) : null;
+const lightboxZoom = makeZoomable($('#lightbox'));
 if (api.version) $('.sidebar-foot').textContent = `DeskNotes 版本 ${api.version}`;
 let lightboxSource = null; // the picture in the note, for 刪除
 function openLightbox(src) {
@@ -1740,10 +1777,21 @@ function openLightbox(src) {
   lightboxSource = src.tagName === 'IMG' && editor.contains(src) ? src : null;
   $('#lb-delete').classList.toggle('hidden', !lightboxSource);
   $('#lightbox').classList.remove('hidden');
-  if (lightboxZoom) lightboxZoom.show(img);
+  lightboxZoom.show(img);
 }
 const closeLightbox = () => $('#lightbox').classList.add('hidden');
-$('#lightbox').addEventListener('click', () => { if (!IS_MOBILE) closeLightbox(); });
+// Computer: a plain click closes the picture, unless it was zoomed or dragged.
+$('#lightbox').addEventListener('click', (e) => {
+  if (!IS_MOBILE && !e.target.closest('button') && !lightboxZoom.zoomed() && !lightboxZoom.dragged()) closeLightbox();
+});
+// Ctrl + mouse wheel on a picture in the note opens it zoomed.
+editor.addEventListener('wheel', (e) => {
+  if (IS_MOBILE || !e.ctrlKey || e.target.tagName !== 'IMG') return;
+  e.preventDefault();
+  hideImageBar();
+  openLightbox(e.target);
+  if (e.deltaY < 0) lightboxZoom.zoomBy(1.5, e.clientX, e.clientY);
+}, { passive: false });
 $('#lb-close').addEventListener('click', closeLightbox);
 $('#lb-delete').addEventListener('click', async () => {
   const img = lightboxSource;
@@ -2743,7 +2791,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     if (!$('#file-preview').classList.contains('hidden')) { closeFilePreview(); return; }
     if (!$('#color-palette').classList.contains('hidden')) { closePalette(); return; }
-    if (!$('#lightbox').classList.contains('hidden')) { $('#lightbox').classList.add('hidden'); return; }
+    if (!$('#lightbox').classList.contains('hidden')) { closeLightbox(); return; }
     hideContextMenu();
     if (selectedImg) { hideImageBar(); return; }
     if (inEditor) closeEditor();
