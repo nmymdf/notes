@@ -9,6 +9,9 @@
   --line: #3a3a3a;
   --accent: #ffb020;
   --danger: #ff6b6b;
+  --c-red: #e5484d;
+  --c-yellow: #f2c037;
+  --c-green: #3fb950;
   --radius: 16px;
   font-family: "Segoe UI", "Microsoft JhengHei", "PingFang TC", sans-serif;
   color-scheme: dark;
@@ -93,7 +96,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .search input { flex: 1; min-width: 0; background: none; border: 0; outline: none; font-size: 16px; }
 .search svg { width: 20px; height: 20px; color: #ccc; }
 
-.sortbar { display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 6px 28px; color: var(--muted); }
+.sortbar { display: flex; align-items: center; justify-content: flex-end; padding-left: 28px; gap: 6px; padding: 6px 28px; color: var(--muted); }
 .sortbar select { background: none; border: 0; color: var(--muted); font-size: 16px; font-weight: 600; cursor: pointer; }
 .sortbar select option { background: var(--panel); color: var(--text); }
 .sortbar .sep { margin: 0 8px; }
@@ -104,16 +107,39 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 
 .note-card { cursor: pointer; user-select: none; position: relative; }
 .note-card .thumb {
-  width: 100%; aspect-ratio: 1; background: var(--card); border-radius: 12px;
+  width: 100%; aspect-ratio: 1; background: var(--tb, var(--card)); border-radius: 12px;
   padding: 9px; overflow: hidden; font-size: 12.5px; line-height: 1.5; position: relative;
   word-break: break-word;
 }
 .note-card .thumb::after {
   content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 40px;
-  background: linear-gradient(transparent, var(--card)); border-radius: 0 0 var(--radius) var(--radius);
+  background: linear-gradient(transparent, var(--tb, var(--card))); border-radius: 0 0 12px 12px;
 }
-.note-card:hover .thumb { background: var(--card-hover); }
-.note-card:hover .thumb::after { background: linear-gradient(transparent, var(--card-hover)); }
+.note-card:hover .thumb { --tb: var(--card-hover); }
+
+/* note colors: tinted card, or a bar on the left in list/table views */
+.note-card.c-red { --nc: var(--c-red); } .note-card.c-red .thumb { --tb: #47252a; } .note-card.c-red:hover .thumb { --tb: #5a2e35; }
+.note-card.c-yellow { --nc: var(--c-yellow); } .note-card.c-yellow .thumb { --tb: #45391a; } .note-card.c-yellow:hover .thumb { --tb: #574821; }
+.note-card.c-green { --nc: var(--c-green); } .note-card.c-green .thumb { --tb: #203d28; } .note-card.c-green:hover .thumb { --tb: #294d33; }
+#notes.list .note-card[class*=" c-"], #notes.table .note-card[class*=" c-"] { box-shadow: inset 4px 0 0 var(--nc); }
+.dot { width: 16px; height: 16px; border-radius: 50%; display: inline-block; flex: none; }
+.dot.red { background: var(--c-red); } .dot.yellow { background: var(--c-yellow); } .dot.green { background: var(--c-green); }
+.dot.none { border: 2px solid #777; background: linear-gradient(135deg, transparent 44%, #999 44% 56%, transparent 56%); }
+.color-filter { display: flex; align-items: center; gap: 4px; margin-right: auto; padding-left: 16px; }
+.color-filter > span { font-size: 14px; margin-right: 4px; }
+.color-filter button {
+  background: none; border: 1px solid transparent; border-radius: 14px; padding: 3px 9px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 14px;
+}
+.color-filter button:hover { background: var(--panel-2); }
+.color-filter button.on { border-color: #666; color: var(--text); background: var(--panel-2); }
+.note-colors { display: inline-flex; gap: 2px; margin-right: 4px; }
+.note-colors button { background: none; border: 2px solid transparent; border-radius: 50%; padding: 3px; cursor: pointer; display: inline-flex; }
+.note-colors button.on { border-color: #ddd; }
+.context-menu .swatch-row { display: flex; align-items: center; gap: 6px; padding: 6px 12px 8px; border-bottom: 1px solid #3a3a3a; margin-bottom: 4px; }
+.context-menu .swatch-row > span { color: var(--muted); font-size: 13px; margin-right: 4px; }
+.context-menu .swatch-row button { width: auto; padding: 3px; border-radius: 50%; border: 2px solid transparent; display: inline-flex; }
+.context-menu .swatch-row button.on { border-color: #ddd; }
 .note-card .thumb img { width: 100%; border-radius: 8px; display: block; margin-bottom: 6px; }
 .note-card .thumb img.with-text { max-height: 55%; object-fit: cover; }
 .note-card .thumb .snippet { white-space: pre-line; }

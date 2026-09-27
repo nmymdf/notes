@@ -53,6 +53,17 @@ function noteTitle(n) {
   return /<img/i.test(n.html) ? '圖片筆記' : '未命名筆記';
 }
 
+const NOTE_COLORS = [
+  { value: 'red', label: '紅' },
+  { value: 'yellow', label: '黃' },
+  { value: 'green', label: '綠' },
+];
+
+function setNoteColor(ids, color) {
+  for (const n of [...db.notes, ...vault.notes]) if (ids.includes(n.id)) n.color = color || null;
+  persist();
+}
+
 const inVaultView = () => state.view === 'vault';
 const findNote = (id) => db.notes.find((x) => x.id === id) || vault.notes.find((x) => x.id === id);
 const isVaultNote = (n) => vault.notes.includes(n);
@@ -144,6 +155,21 @@ function showContextMenu(x, y, items) {
   const menu = $('#context-menu');
   menu.innerHTML = '';
   for (const it of items) {
+    if (it.swatches) {
+      const row = document.createElement('div');
+      row.className = 'swatch-row';
+      row.innerHTML = '<span>顏色</span>';
+      for (const c of [{ value: '', title: '無色' }, ...NOTE_COLORS]) {
+        const b = document.createElement('button');
+        b.title = c.title || c.label;
+        b.innerHTML = `<i class="dot ${c.value || 'none'}"></i>`;
+        if ((it.current || '') === c.value) b.className = 'on';
+        b.onclick = () => { hideContextMenu(); it.pick(c.value || null); };
+        row.appendChild(b);
+      }
+      menu.appendChild(row);
+      continue;
+    }
     const b = document.createElement('button');
     b.textContent = it.label;
     if (it.danger) b.className = 'danger';
@@ -238,14 +264,19 @@ async function deleteFolder(id) {
 // ---------------------------------------------------------------- list
 
 function visibleNotes() {
-  if (inVaultView()) return sortNotes((vault.unlocked ? vault.notes : []).filter(matchesSearch));
+  if (inVaultView()) return sortNotes((vault.unlocked ? vault.notes : []).filter(matchesSearch).filter(matchesColor));
   return sortNotes(db.notes.filter((n) => {
     if (state.view === 'trash') return !!n.deletedAt;
     if (n.deletedAt) return false;
     if (state.view === 'starred') return n.starred;
     if (state.view !== 'all') return n.folderId === state.view;
     return true;
-  }).filter(matchesSearch));
+  }).filter(matchesSearch).filter(matchesColor));
+}
+
+function matchesColor(n) {
+  const f = state.colorFilter;
+  return !f || (f === 'none' ? !n.color : n.color === f);
 }
 
 function matchesSearch(n) {
@@ -304,6 +335,8 @@ function renderList() {
   $('#normal-actions').classList.toggle('hidden', state.selecting);
   $('#select-actions').classList.toggle('hidden', !state.selecting);
   $('#btn-sel-restore').classList.toggle('hidden', !inTrash);
+  $('#btn-sel-color').classList.toggle('hidden', inTrash);
+  $$('#color-filter button').forEach((b) => b.classList.toggle('on', b.dataset.cf === (state.colorFilter || '')));
   $('#btn-sel-move').classList.toggle('hidden', inTrash || inVault);
   $('#btn-sel-vault').classList.toggle('hidden', inTrash || inVault);
   $('#btn-sel-unvault').classList.toggle('hidden', !inVault);
@@ -327,7 +360,7 @@ function renderList() {
   }
   for (const n of notes) {
     const card = document.createElement('div');
-    card.className = 'note-card' + (state.selected.has(n.id) ? ' selected' : '');
+    card.className = 'note-card' + (n.color ? ` c-${n.color}` : '') + (state.selected.has(n.id) ? ' selected' : '');
     card.dataset.id = n.id;
     card.draggable = !inTrash && !inVault;
     const img = firstImage(n.html);
@@ -362,6 +395,7 @@ function renderList() {
   empty.classList.toggle('hidden', notes.length > 0 || gate);
   if (!notes.length) {
     empty.innerHTML = state.search ? '找不到符合的筆記'
+      : state.colorFilter ? '沒有這個顏色的筆記<br><small>按「全部」可顯示所有筆記</small>'
       : inVault ? '上鎖筆記是空的<br><small>在這裡建立的筆記會加密保存，也可以在其他筆記按右鍵「移到上鎖筆記」</small>'
       : inTrash ? `垃圾筒是空的<br><small>刪除的筆記會保留 ${TRASH_DAYS} 天</small>`
         : '還沒有筆記<br><small>按「建立筆記」、Ctrl+N，或直接 Ctrl+V 貼上截圖開始</small>';
@@ -576,6 +610,7 @@ function noteContextMenu(e, id) {
   const n = findNote(id);
   if (isVaultNote(n)) {
     showContextMenu(e.clientX, e.clientY, [
+      { swatches: true, current: n.color, pick: (c) => { setNoteColor([id], c); render(); } },
       { label: '開啟', action: () => openEditor(id) },
       { label: '移出上鎖筆記', action: async () => { await moveOutOfVault([id]); render(); } },
       { label: '永久刪除', danger: true, action: async () => { if (await destroyVaultNotes([id])) render(); } },
@@ -588,6 +623,7 @@ function noteContextMenu(e, id) {
       { label: '永久刪除', danger: true, action: async () => { if (await destroyNotes([id])) render(); } },
     ]
     : [
+      { swatches: true, current: n.color, pick: (c) => { setNoteColor([id], c); render(); } },
       { label: '開啟', action: () => openEditor(id) },
       { label: n.starred ? '移除最愛' : '加入我的最愛', action: () => { n.starred = !n.starred; persist(); render(); } },
       { label: '移動到資料夾…', action: async () => { if (await moveNotes([id])) render(); } },
@@ -625,6 +661,7 @@ function openEditor(id) {
   for (const o of folderOptions()) sel.add(new Option(o.label, o.value));
   sel.value = n.folderId || '';
   $('#btn-star').classList.toggle('on', !!n.starred);
+  $$('#note-colors button').forEach((b) => b.classList.toggle('on', b.dataset.c === (n.color || '')));
   const locked = isVaultNote(n);
   $('#vault-badge').classList.toggle('hidden', !locked);
   for (const sel of ['#note-folder', '#btn-star', '#btn-export']) $(sel).classList.toggle('hidden', locked);
@@ -1086,6 +1123,33 @@ document.addEventListener('mousedown', (e) => {
 updateColorMarks();
 
 $('#btn-back').addEventListener('click', closeEditor);
+$('#note-colors').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b || !state.currentId) return;
+  setNoteColor([state.currentId], b.dataset.c);
+  $$('#note-colors button').forEach((x) => x.classList.toggle('on', x === b));
+});
+$('#color-filter').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  state.colorFilter = b.dataset.cf || null;
+  renderList();
+});
+$('#btn-sel-color').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const r = e.currentTarget.getBoundingClientRect();
+  showContextMenu(r.left, r.bottom + 4, [{
+    swatches: true,
+    current: '-',
+    pick: (c) => {
+      setNoteColor([...state.selected], c);
+      toast(c ? `已設定 ${state.selected.size} 則的顏色` : `已移除 ${state.selected.size} 則的顏色`);
+      state.selected.clear();
+      state.selecting = false;
+      render();
+    },
+  }]);
+});
 $('#note-folder').addEventListener('change', (e) => {
   const n = findNote(state.currentId);
   n.folderId = e.target.value || null;

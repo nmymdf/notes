@@ -76,6 +76,7 @@
         <div class="actions hidden" id="select-actions">
           <span id="select-count">已選取 0 則</span>
           <button class="text-btn" id="btn-select-all">全選</button>
+          <button class="text-btn" id="btn-sel-color"><i class="dot red"></i>顏色</button>
           <button class="text-btn" id="btn-sel-move"><svg><use href="#i-move"/></svg>移動</button>
           <button class="text-btn" id="btn-sel-vault"><svg><use href="#i-lock"/></svg>上鎖</button>
           <button class="text-btn" id="btn-sel-unvault"><svg><use href="#i-unlock"/></svg>移出上鎖</button>
@@ -89,6 +90,14 @@
         </label>
       </header>
       <div class="sortbar">
+        <div class="color-filter" id="color-filter">
+          <span>顏色</span>
+          <button data-cf="" class="on">全部</button>
+          <button data-cf="red" title="只看紅色"><i class="dot red"></i></button>
+          <button data-cf="yellow" title="只看黃色"><i class="dot yellow"></i></button>
+          <button data-cf="green" title="只看綠色"><i class="dot green"></i></button>
+          <button data-cf="none" title="只看無色"><i class="dot none"></i></button>
+        </div>
         <svg><use href="#i-sort"/></svg>
         <select id="sort-field">
           <option value="updatedAt">修改日期</option>
@@ -119,6 +128,12 @@
         <span id="vault-badge" class="vault-badge hidden"><svg><use href="#i-lock"/></svg>已加密</span>
         <span id="save-state"></span>
         <select id="note-folder" title="資料夾"></select>
+        <span class="note-colors" id="note-colors" title="筆記顏色">
+          <button data-c="" title="無色"><i class="dot none"></i></button>
+          <button data-c="red" title="紅"><i class="dot red"></i></button>
+          <button data-c="yellow" title="黃"><i class="dot yellow"></i></button>
+          <button data-c="green" title="綠"><i class="dot green"></i></button>
+        </span>
         <button class="icon-btn" id="btn-star" title="加入我的最愛"><svg><use href="#i-star"/></svg></button>
         <button class="icon-btn" id="btn-on-top" title="視窗置頂"><svg><use href="#i-pin"/></svg></button>
         <button class="icon-btn" id="btn-export" title="匯出成 HTML"><svg><use href="#i-export"/></svg></button>
