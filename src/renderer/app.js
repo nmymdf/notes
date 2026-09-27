@@ -738,7 +738,10 @@ function fileContextMenu(e, id) {
       { label: '開啟', action: () => openFile(f) },
       ...(api.files.inApp
         ? [{ label: '複製到手機', action: () => copyFileToPhone(f) }, { label: '分享…', action: () => shareFile(f) }]
-        : [{ label: '在檔案總管中顯示', action: () => api.files.show(db.folders, f) }]),
+        : [
+          { label: '在檔案總管中顯示', action: () => api.files.show(db.folders, f) },
+          ...(fileKind(f.name) === 'image' ? [{ label: '畫圖（另存新檔）', action: () => drawOnFile(f) }] : []),
+        ]),
       { label: '重新命名', action: () => renameFile(id) },
       { label: '移動到…', action: async () => { if (await moveFiles([id])) render(); } },
       { label: '刪除', danger: true, action: async () => { await trashFiles([id]); render(); } },
@@ -1512,6 +1515,7 @@ function showImageBar(img) {
   selectedImg = img;
   img.classList.add('selected');
   const bar = $('#img-bar');
+  bar.querySelector('[data-act="restore"]').classList.toggle('hidden', !readDrawing(img)?.base);
   bar.classList.remove('hidden');
   const r = img.getBoundingClientRect();
   const br = bar.getBoundingClientRect();
@@ -1527,7 +1531,13 @@ $('#img-bar').addEventListener('mousedown', (e) => e.preventDefault());
 $('#img-bar').addEventListener('click', (e) => {
   const b = e.target.closest('button');
   if (!b || !selectedImg) return;
-  if (b.dataset.act === 'delete') {
+  if (b.dataset.act === 'draw') {
+    drawOnImage(selectedImg);
+    return;
+  }
+  if (b.dataset.act === 'restore') {
+    restoreOriginalImage(selectedImg);
+  } else if (b.dataset.act === 'delete') {
     selectedImg.remove();
   } else {
     selectedImg.style.width = b.dataset.w ? b.dataset.w + '%' : '';
@@ -1565,10 +1575,147 @@ editor.addEventListener('contextmenu', (e) => {
 editor.addEventListener('dblclick', (e) => {
   if (e.target.tagName !== 'IMG') return;
   hideImageBar();
+  if (!IS_MOBILE && e.target.dataset.drawing) { drawOnImage(e.target); return; }
   $('#lightbox img').src = e.target.src;
   $('#lightbox').classList.remove('hidden');
 });
 $('#lightbox').addEventListener('click', () => $('#lightbox').classList.add('hidden'));
+
+// ----- drawing (desktop only; the editor itself is in drawing.js)
+// A drawing is stored as a normal PNG image in the note, plus data-drawing
+// with every stroke, so it can be edited again later. When drawing on a
+// picture, data-drawing.base keeps the original picture so it can be restored.
+
+const DRAW_MAX = 4000; // longest side of the canvas, in pixels
+const askDrawText = () => openModal({ title: '輸入文字', input: '' });
+const imageSrcOf = (img) => img.dataset.src || img.getAttribute('src');
+function readDrawing(img) {
+  try { return img.dataset.drawing ? JSON.parse(img.dataset.drawing) : null; } catch { return null; }
+}
+function imageSize(url) {
+  return new Promise((resolve, reject) => {
+    const i = new Image();
+    i.onload = () => resolve({ w: i.naturalWidth || 1000, h: i.naturalHeight || 1000 });
+    i.onerror = () => reject(new Error('圖片載入失敗'));
+    i.src = url;
+  });
+}
+const imageMime = (name) => (/\.svg$/i.test(name) ? 'image/svg+xml' : '');
+// A blob: copy of the picture, which the canvas is allowed to export.
+async function imageBlobUrl(src) {
+  const bytes = await api.readImage(src);
+  if (!bytes) throw new Error(/\/vault\//.test(src) ? '上鎖筆記已上鎖，無法讀取圖片' : '找不到原始圖片');
+  return URL.createObjectURL(new Blob([bytes], { type: imageMime(src) }));
+}
+function fitDrawing({ w, h }) {
+  const k = Math.min(1, DRAW_MAX / Math.max(w, h));
+  return { w: Math.round(w * k), h: Math.round(h * k) };
+}
+function setNoteImage(img, src, drawing) {
+  img.removeAttribute('data-src');
+  img.setAttribute('src', src);
+  if (drawing) img.dataset.drawing = JSON.stringify(drawing);
+  else img.removeAttribute('data-drawing');
+}
+
+async function newDrawing() {
+  hideImageBar();
+  const noteId = state.currentId;
+  if (!noteId) return;
+  const s = getSelection();
+  const saved = s.rangeCount && editor.contains(s.anchorNode) ? s.getRangeAt(0).cloneRange() : null;
+  const res = await DrawingEditor.open({ drawing: { v: 1, w: 1600, h: 1000, bg: 'white', items: [] }, title: '畫圖', askText: askDrawText });
+  if (!res || state.currentId !== noteId) return;
+  if (res.error) { toast(res.error); return; }
+  try {
+    const url = await api.saveImage(await res.blob.arrayBuffer(), 'image/png', currentInVault());
+    editor.focus();
+    if (saved) { s.removeAllRanges(); s.addRange(saved); } else placeCaretAtEnd(editor);
+    document.execCommand('insertHTML', false, `<img src="${url}" data-drawing="${escapeHtml(JSON.stringify(res.drawing))}"><br>`);
+    onEdited();
+  } catch (err) {
+    toast(`無法儲存畫圖：${err.message || err}`);
+  }
+}
+$('#btn-draw').addEventListener('click', newDrawing);
+
+// Draw on a picture in the note, or edit an earlier drawing again.
+async function drawOnImage(img) {
+  hideImageBar();
+  const noteId = state.currentId;
+  const old = readDrawing(img);
+  const base = old ? old.base : imageSrcOf(img);
+  let url = null;
+  let res;
+  try {
+    let drawing = old;
+    if (base) {
+      url = await imageBlobUrl(base);
+      if (!drawing) drawing = { v: 1, ...fitDrawing(await imageSize(url)), bg: 'image', base, items: [] };
+    }
+    res = await DrawingEditor.open({ drawing, baseUrl: url, title: base ? '在圖片上畫' : '畫圖', askText: askDrawText });
+  } catch (err) {
+    toast(err.message || String(err));
+    return;
+  } finally {
+    if (url) URL.revokeObjectURL(url);
+  }
+  if (!res || state.currentId !== noteId || !editor.contains(img)) return;
+  if (res.error) { toast(res.error); return; }
+  if (base && !res.drawing.items.length) {
+    setNoteImage(img, base, null); // everything erased: back to the original picture
+  } else {
+    try {
+      setNoteImage(img, await api.saveImage(await res.blob.arrayBuffer(), 'image/png', currentInVault()), res.drawing);
+    } catch (err) {
+      toast(`無法儲存畫圖：${err.message || err}`);
+      return;
+    }
+  }
+  onEdited();
+}
+
+async function restoreOriginalImage(img) {
+  const d = readDrawing(img);
+  if (!d?.base) return;
+  if (!(await openModal({ title: '還原原圖？', text: '畫在圖片上的內容會被移除。', okText: '還原' }))) return;
+  if (!editor.contains(img)) return;
+  setNoteImage(img, d.base, null);
+  onEdited();
+}
+
+// Pictures in file folders: draw, then save as a new file next to the original.
+async function drawOnFile(f) {
+  let url = null;
+  let res;
+  try {
+    url = URL.createObjectURL(new Blob([await api.files.read(db.folders, f)], { type: imageMime(f.name) }));
+    const size = fitDrawing(await imageSize(url));
+    res = await DrawingEditor.open({
+      drawing: { v: 1, ...size, bg: 'image', items: [] },
+      baseUrl: url,
+      title: `在「${f.name}」上畫（完成後另存新檔，原檔不變）`,
+      askText: askDrawText,
+    });
+  } catch (err) {
+    toast(err.message || String(err));
+    return;
+  } finally {
+    if (url) URL.revokeObjectURL(url);
+  }
+  if (!res) return;
+  if (res.error) { toast(res.error); return; }
+  try {
+    const stem = f.name.replace(/\.[^.]+$/, '');
+    const rec = await api.files.addBuffer(db.folders, f.folderId, `${stem}（標註）.png`, await res.blob.arrayBuffer());
+    db.files.push(rec);
+    await persist(true);
+    render();
+    toast(`已另存為「${rec.name}」`);
+  } catch (err) {
+    openModal({ title: '無法儲存', text: err.message || String(err), okText: '好' });
+  }
+}
 
 editor.addEventListener('input', onEdited);
 editor.addEventListener('keyup', updateToolbarState);

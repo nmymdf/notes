@@ -87,6 +87,17 @@ class FileStore {
     return { added, skipped };
   }
 
+  // A new file made inside DeskNotes (e.g. an annotated copy of a picture).
+  async addBuffer(folders, folderId, name, buffer) {
+    const dir = this.folderDir(folders, folderId);
+    fs.mkdirSync(dir, { recursive: true });
+    const finalName = uniqueName(dir, safeSegment(name));
+    const dest = path.join(dir, finalName);
+    fs.writeFileSync(dest, Buffer.from(buffer));
+    const st = fs.statSync(dest);
+    return { id: newId(), name: finalName, folderId, size: st.size, mtime: st.mtimeMs, hash: await hashFile(dest), createdAt: Date.now(), deletedAt: null };
+  }
+
   // ---------- keep the disk in sync with the records ----------
 
   // before/after: { folders, files }. preserve: [{ fromId, toId }] — keep the

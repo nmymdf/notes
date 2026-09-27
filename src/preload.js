@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('notesAPI', {
   save: (db, opts) => ipcRenderer.invoke('db:save', db, opts),
   cleanupImages: () => ipcRenderer.invoke('db:cleanup-images'),
   saveImage: (buffer, mime, inVault = false) => ipcRenderer.invoke('image:save', { buffer, mime, inVault }),
+  readImage: (url) => ipcRenderer.invoke('image:read', url),
   pickImages: (inVault = false) => ipcRenderer.invoke('image:pick', inVault),
   vault: {
     status: () => ipcRenderer.invoke('vault:status'),
@@ -30,6 +31,8 @@ contextBridge.exposeInMainWorld('notesAPI', {
     scan: (folders, files) => ipcRenderer.invoke('files:scan', folders, files),
     pick: () => ipcRenderer.invoke('files:pick'),
     add: (folders, folderId, paths) => ipcRenderer.invoke('files:add', folders, folderId, paths),
+    read: (folders, file) => ipcRenderer.invoke('files:read', folders, file),
+    addBuffer: (folders, folderId, name, buffer) => ipcRenderer.invoke('files:add-buffer', folders, folderId, name, buffer),
     materialize: (before, after, preserve) => ipcRenderer.invoke('files:materialize', before, after, preserve),
     open: (folders, file) => ipcRenderer.invoke('files:open', folders, file),
     show: (folders, file) => ipcRenderer.invoke('files:show', folders, file),

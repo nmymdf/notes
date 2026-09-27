@@ -177,6 +177,21 @@ function registerIpc() {
   ipcMain.handle('db:cleanup-images', () => { cleanupImages(loadDb()); return true; });
 
   ipcMain.handle('image:save', (_e, { buffer, mime, inVault }) => saveImage(buffer, mime, inVault));
+  // Image bytes for the drawing editor (a canvas can't export images loaded
+  // from note-img:// directly, so the renderer draws a blob: copy instead).
+  ipcMain.handle('image:read', async (_e, url) => {
+    const m = new RegExp(`^${IMG_SCHEME}://(img|vault)/([\\w.-]+)$`).exec(url || '');
+    if (m && m[1] === 'vault') return vault.readImage(m[2]);
+    if (m) {
+      const p = path.join(imagesDir, m[2]);
+      return fs.existsSync(p) ? fs.readFileSync(p) : null;
+    }
+    if (/^(https?:|data:image\/)/i.test(url || '')) {
+      const res = await net.fetch(url);
+      return res.ok ? Buffer.from(await res.arrayBuffer()) : null;
+    }
+    return null;
+  });
   ipcMain.handle('image:pick', async (_e, inVault) => {
     const res = await dialog.showOpenDialog(mainWindow, {
       title: '選擇圖片',
@@ -277,6 +292,8 @@ Add-Type -Namespace W -Name K -MemberDefinition '[DllImport("user32.dll")] publi
     return res.canceled ? [] : res.filePaths;
   });
   ipcMain.handle('files:add', (_e, folders, folderId, paths) => fileStore.add(folders, folderId, paths));
+  ipcMain.handle('files:read', (_e, folders, file) => fs.readFileSync(fileStore.contentPath(folders, file)));
+  ipcMain.handle('files:add-buffer', (_e, folders, folderId, name, buffer) => fileStore.addBuffer(folders, folderId, name, buffer));
   ipcMain.handle('files:materialize', (_e, before, after, preserve) => fileStore.materialize(before, after, preserve));
   ipcMain.handle('files:open', (_e, folders, file) => shell.openPath(fileStore.contentPath(folders, file)));
   ipcMain.handle('files:show', (_e, folders, file) => shell.showItemInFolder(fileStore.contentPath(folders, file)));
