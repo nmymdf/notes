@@ -9,14 +9,15 @@ const PREFS_KEY = 'desknotes.prefs';
 
 let db = { version: 1, folders: [], notes: [] };
 // Locked notes: decrypted copies live here only while the vault is unlocked.
-const vault = { exists: false, unlocked: false, notes: [] };
+const vault = { exists: false, unlocked: false, notes: [], folders: [] };
+const vaultPayload = () => ({ notes: vault.notes, folders: vault.folders });
 const state = {
   view: 'all',              // 'all' | 'starred' | 'trash' | folder id
   search: '',
   selecting: false,
   selected: new Set(),
   currentId: null,          // note open in the editor
-  prefs: { sort: 'updatedAt', dir: 'desc', layout: 'grid', sidebar: true },
+  prefs: { sort: 'updatedAt', dir: 'desc', layout: 'grid', sidebar: true, collapsed: {} },
 };
 
 // ---------------------------------------------------------------- utils
@@ -64,7 +65,7 @@ function setNoteColor(ids, color) {
   persist();
 }
 
-const inVaultView = () => state.view === 'vault';
+const inVaultView = () => state.view === 'vault' || folderScope(state.view) === 'vault';
 const findNote = (id) => db.notes.find((x) => x.id === id) || vault.notes.find((x) => x.id === id);
 const isVaultNote = (n) => vault.notes.includes(n);
 const currentInVault = () => { const n = findNote(state.currentId); return !!n && isVaultNote(n); };
@@ -92,7 +93,7 @@ function persist(immediate = false) {
   const run = async () => {
     try {
       await api.save(db);
-      if (vault.unlocked) await api.vault.save(vault.notes);
+      if (vault.unlocked) await api.vault.save(vaultPayload());
       if (state.currentId) $('#save-state').textContent = '已儲存';
     } catch (err) {
       console.error(err);
@@ -183,10 +184,53 @@ function showContextMenu(x, y, items) {
 }
 function hideContextMenu() { $('#context-menu').classList.add('hidden'); }
 
-function folderOptions(includeNone = true) {
-  const opts = includeNone ? [{ value: '', label: '（未分類）' }] : [];
-  for (const f of db.folders) opts.push({ value: f.id, label: f.name });
+// ---------------------------------------------------------------- folders
+//
+// Folders live in db.folders (normal) or vault.folders (inside the encrypted
+// vault). At most two levels: a folder's parentId points to a top-level folder
+// of the same scope. Siblings are ordered by `order`.
+
+const foldersOf = (scope) => (scope === 'vault' ? vault.folders : db.folders);
+const notesOf = (scope) => (scope === 'vault' ? vault.notes : db.notes);
+const findFolder = (id) => (id ? db.folders.find((f) => f.id === id) || vault.folders.find((f) => f.id === id) : null);
+function folderScope(id) {
+  if (!id) return null;
+  if (vault.folders.some((f) => f.id === id)) return 'vault';
+  return db.folders.some((f) => f.id === id) ? 'db' : null;
+}
+function setFolders(scope, list) {
+  if (scope === 'vault') vault.folders = list; else db.folders = list;
+}
+const childrenOf = (scope, parentId) => foldersOf(scope)
+  .filter((f) => (f.parentId || null) === parentId)
+  .sort((a, b) => (a.order ?? a.createdAt) - (b.order ?? b.createdAt));
+const hasChildren = (id) => foldersOf(folderScope(id)).some((f) => f.parentId === id);
+function folderAndChildrenIds(id) {
+  return [id, ...foldersOf(folderScope(id)).filter((f) => f.parentId === id).map((f) => f.id)];
+}
+function normalizeOrders(scope, parentId) {
+  childrenOf(scope, parentId).forEach((f, i) => { f.order = i; });
+}
+// Folders whose parent no longer exists become top-level.
+function repairFolders(scope) {
+  const list = foldersOf(scope);
+  for (const f of list) if (f.parentId && !list.some((p) => p.id === f.parentId && !p.parentId)) f.parentId = null;
+}
+
+function folderOptions(scope = 'db', includeNone = true) {
+  const opts = includeNone ? [{ value: '', label: scope === 'vault' ? '（上鎖筆記，不分資料夾）' : '（未分類）' }] : [];
+  for (const f of childrenOf(scope, null)) {
+    opts.push({ value: f.id, label: f.name });
+    for (const c of childrenOf(scope, f.id)) opts.push({ value: c.id, label: `　└ ${c.name}` });
+  }
   return opts;
+}
+
+function folderLabel(id) {
+  const f = findFolder(id);
+  if (!f) return '';
+  const parent = findFolder(f.parentId);
+  return parent ? `${parent.name} › ${f.name}` : f.name;
 }
 
 // ---------------------------------------------------------------- sidebar
@@ -194,6 +238,7 @@ function folderOptions(includeNone = true) {
 function renderSidebar() {
   const alive = db.notes.filter((n) => !n.deletedAt);
   $('#count-all').textContent = alive.length;
+  $('#count-uncat').textContent = alive.filter((n) => !n.folderId).length || '';
   $('#count-starred').textContent = alive.filter((n) => n.starred).length || '';
   $('#count-trash').textContent = db.notes.length - alive.length || '';
   $('#count-vault').textContent = vault.unlocked ? vault.notes.length : '';
@@ -201,33 +246,62 @@ function renderSidebar() {
   $('#btn-undo-import').classList.toggle('hidden', !undoCount);
   $('#btn-undo-import span').textContent = `刪除上次匯入的 ${undoCount} 則`;
 
-  const list = $('#folder-list');
-  list.innerHTML = '';
-  for (const f of db.folders) {
-    const a = document.createElement('a');
-    a.className = 'nav-item';
-    a.dataset.view = f.id;
-    a.innerHTML = `<svg><use href="#i-folder"/></svg><span></span><em>${alive.filter((n) => n.folderId === f.id).length}</em>`;
-    a.querySelector('span').textContent = f.name;
-    a.title = f.name;
-    list.appendChild(a);
-  }
+  renderFolderTree($('#folder-list'), 'db', alive);
+  $('#vault-folder-list').classList.toggle('hidden', !vault.unlocked);
+  $('#btn-new-vault-folder').classList.toggle('hidden', !vault.unlocked);
+  if (vault.unlocked) renderFolderTree($('#vault-folder-list'), 'vault', vault.notes);
+  else $('#vault-folder-list').innerHTML = '';
+
   $$('#sidebar .nav-item').forEach((a) => a.classList.toggle('active', a.dataset.view === state.view));
   $('#sidebar').classList.toggle('collapsed', !state.prefs.sidebar);
 }
 
-async function newFolder() {
-  const name = await openModal({ title: '新增資料夾', input: '' , okText: '建立' });
+function renderFolderTree(list, scope, notes) {
+  list.innerHTML = '';
+  const count = (id) => {
+    const ids = folderAndChildrenIds(id);
+    return notes.filter((n) => ids.includes(n.folderId)).length;
+  };
+  for (const f of childrenOf(scope, null)) {
+    const kids = childrenOf(scope, f.id);
+    list.appendChild(folderRow(f, count(f.id), kids.length));
+    if (kids.length && !state.prefs.collapsed[f.id]) {
+      for (const c of kids) list.appendChild(folderRow(c, count(c.id), 0));
+    }
+  }
+}
+
+function folderRow(f, count, kidCount) {
+  const a = document.createElement('a');
+  a.className = 'nav-item folder-item' + (f.parentId ? ' sub' : '');
+  a.dataset.view = f.id;
+  a.dataset.folder = f.id;
+  a.draggable = true;
+  const caret = f.parentId ? ''
+    : kidCount ? `<button class="caret" data-toggle="${f.id}" title="展開／收合">${state.prefs.collapsed[f.id] ? '▸' : '▾'}</button>`
+      : '<i class="caret"></i>';
+  const tag = db.defaultFolderId === f.id ? '<small class="default-tag" title="新筆記預設放在這裡">預設</small>' : '';
+  a.innerHTML = `${caret}<svg><use href="#i-folder"/></svg><span class="name"></span>${tag}<em>${count}</em>`;
+  a.querySelector('.name').textContent = f.name;
+  a.title = f.name;
+  return a;
+}
+
+async function newFolder(scope = 'db', parentId = null) {
+  const title = parentId ? `在「${findFolder(parentId).name}」裡新增子資料夾`
+    : scope === 'vault' ? '新增上鎖資料夾' : '新增資料夾';
+  const name = await openModal({ title, input: '', okText: '建立' });
   if (!name) return null;
-  const f = { id: uid(), name, createdAt: Date.now() };
-  db.folders.push(f);
+  const f = { id: uid(), name, createdAt: Date.now(), parentId, order: childrenOf(scope, parentId).length };
+  foldersOf(scope).push(f);
+  if (parentId && state.prefs.collapsed[parentId]) { delete state.prefs.collapsed[parentId]; savePrefs(); }
   persist();
   renderSidebar();
   return f;
 }
 
 async function renameFolder(id) {
-  const f = db.folders.find((x) => x.id === id);
+  const f = findFolder(id);
   const name = await openModal({ title: '重新命名資料夾', input: f.name });
   if (!name) return;
   f.name = name;
@@ -236,40 +310,133 @@ async function renameFolder(id) {
 }
 
 async function deleteFolder(id) {
-  const f = db.folders.find((x) => x.id === id);
-  const inside = db.notes.filter((n) => n.folderId === id && !n.deletedAt);
+  const scope = folderScope(id);
+  const f = findFolder(id);
+  const ids = folderAndChildrenIds(id);
+  const inside = notesOf(scope).filter((n) => ids.includes(n.folderId) && !n.deletedAt);
+  const subs = ids.length - 1;
+  const what = subs ? `（含 ${subs} 個子資料夾）` : '';
   let mode = 'keep';
   if (inside.length) {
-    mode = await openModal({
-      title: `刪除資料夾「${f.name}」？`,
-      text: `這個資料夾裡有 ${inside.length} 則筆記，要怎麼處理？`,
-      options: [
+    const options = scope === 'vault'
+      ? [
+        { value: 'destroy', label: `連同 ${inside.length} 則筆記永久刪除（上鎖筆記不會進垃圾筒）` },
+        { value: 'keep', label: '只刪除資料夾，筆記留在「上鎖筆記」' },
+      ]
+      : [
         { value: 'trash', label: `連同 ${inside.length} 則筆記一起刪除（移到垃圾筒，30 天內可還原）` },
-        { value: 'keep', label: '只刪除資料夾，筆記移到「所有筆記」' },
-      ],
-      okText: '刪除', danger: true,
+        { value: 'keep', label: '只刪除資料夾，筆記移到「未分類」' },
+      ];
+    mode = await openModal({
+      title: `刪除資料夾「${f.name}」${what}？`,
+      text: `裡面有 ${inside.length} 則筆記，要怎麼處理？`,
+      options, okText: '刪除', danger: true,
     });
   } else {
-    mode = (await openModal({ title: `刪除資料夾「${f.name}」？`, text: '這個資料夾是空的。', okText: '刪除', danger: true })) && 'keep';
+    mode = (await openModal({ title: `刪除資料夾「${f.name}」${what}？`, text: '資料夾是空的。', okText: '刪除', danger: true })) && 'keep';
   }
   if (!mode) return;
   if (mode === 'trash') trashNotes(inside.map((n) => n.id));
-  db.folders = db.folders.filter((x) => x.id !== id);
-  for (const n of db.notes) if (n.folderId === id) n.folderId = null;
-  if (state.view === id) state.view = 'all';
-  persist();
+  if (mode === 'destroy') vault.notes = vault.notes.filter((n) => !inside.includes(n));
+  setFolders(scope, foldersOf(scope).filter((x) => !ids.includes(x.id)));
+  for (const n of notesOf(scope)) if (ids.includes(n.folderId)) n.folderId = null;
+  if (ids.includes(db.defaultFolderId)) db.defaultFolderId = null;
+  if (ids.includes(state.view)) state.view = scope === 'vault' ? 'vault' : 'all';
+  normalizeOrders(scope, f.parentId || null);
+  await persist(true);
   render();
+}
+
+async function mergeFolder(id) {
+  const scope = folderScope(id);
+  const f = findFolder(id);
+  const ids = folderAndChildrenIds(id);
+  const targets = folderOptions(scope, false).filter((o) => !ids.includes(o.value));
+  if (!targets.length) { toast('沒有其他資料夾可以合併'); return; }
+  const target = await openModal({
+    title: `把「${f.name}」合併到…`,
+    text: `「${f.name}」裡的筆記會移到選擇的資料夾，然後刪除「${f.name}」。`,
+    options: targets, okText: '合併',
+  });
+  if (!target) return;
+  const t = findFolder(target);
+  const removed = [id];
+  if (!t.parentId) {
+    // Target is top-level: subfolders keep existing, now under the target.
+    for (const k of foldersOf(scope).filter((x) => x.parentId === id)) { k.parentId = t.id; k.order = 1e6 + (k.order || 0); }
+    for (const n of notesOf(scope)) if (n.folderId === id) n.folderId = t.id;
+  } else {
+    // Target is a subfolder: everything (including subfolders' notes) goes into it.
+    for (const n of notesOf(scope)) if (ids.includes(n.folderId)) n.folderId = t.id;
+    removed.push(...ids.slice(1));
+  }
+  setFolders(scope, foldersOf(scope).filter((x) => !removed.includes(x.id)));
+  normalizeOrders(scope, t.id);
+  normalizeOrders(scope, f.parentId || null);
+  if (removed.includes(db.defaultFolderId)) db.defaultFolderId = t.id;
+  if (removed.includes(state.view)) state.view = t.id;
+  await persist(true);
+  render();
+  toast(`已合併到「${t.name}」`);
+}
+
+// Move folder `id` under `parentId` (null = top level), before sibling `beforeId` (null = last).
+function placeFolder(id, parentId, beforeId) {
+  const scope = folderScope(id);
+  const f = findFolder(id);
+  const oldParent = f.parentId || null;
+  f.parentId = parentId;
+  const sibs = childrenOf(scope, parentId).filter((x) => x.id !== id);
+  const idx = beforeId ? sibs.findIndex((x) => x.id === beforeId) : -1;
+  sibs.splice(idx < 0 ? sibs.length : idx, 0, f);
+  sibs.forEach((x, i) => { x.order = i; });
+  if (oldParent !== parentId) normalizeOrders(scope, oldParent);
+  if (parentId && state.prefs.collapsed[parentId]) { delete state.prefs.collapsed[parentId]; savePrefs(); }
+  persist();
+  renderSidebar();
+}
+
+function folderContextMenu(e, id) {
+  const f = findFolder(id);
+  const scope = folderScope(id);
+  const items = [];
+  if (!f.parentId) items.push({ label: '新增子資料夾', action: () => newFolder(scope, id) });
+  items.push({ label: '重新命名', action: () => renameFolder(id) });
+  items.push({ label: '合併到其他資料夾…', action: () => mergeFolder(id) });
+  if (f.parentId) items.push({ label: '移到最外層', action: () => placeFolder(id, null, null) });
+  if (scope === 'db') {
+    items.push({
+      label: db.defaultFolderId === id ? '取消「新筆記預設資料夾」' : '設為新筆記預設資料夾',
+      action: () => {
+        db.defaultFolderId = db.defaultFolderId === id ? null : id;
+        persist();
+        renderSidebar();
+        toast(db.defaultFolderId ? `新筆記會預設放在「${f.name}」` : '已取消預設資料夾');
+      },
+    });
+    items.push({ label: '🔒 移到上鎖筆記', action: () => moveFolderToVault(id) });
+  } else {
+    items.push({ label: '移出上鎖筆記', action: () => moveFolderOutOfVault(id) });
+  }
+  items.push({ label: '刪除資料夾', danger: true, action: () => deleteFolder(id) });
+  showContextMenu(e.clientX, e.clientY, items);
 }
 
 // ---------------------------------------------------------------- list
 
 function visibleNotes() {
-  if (inVaultView()) return sortNotes((vault.unlocked ? vault.notes : []).filter(matchesSearch).filter(matchesColor));
+  const inFolder = findFolder(state.view) ? folderAndChildrenIds(state.view) : null;
+  if (inVaultView()) {
+    let notes = vault.unlocked ? vault.notes : [];
+    if (inFolder) notes = notes.filter((n) => inFolder.includes(n.folderId));
+    return sortNotes(notes.filter(matchesSearch).filter(matchesColor));
+  }
   return sortNotes(db.notes.filter((n) => {
     if (state.view === 'trash') return !!n.deletedAt;
     if (n.deletedAt) return false;
     if (state.view === 'starred') return n.starred;
-    if (state.view !== 'all') return n.folderId === state.view;
+    if (state.view === 'uncategorized') return !n.folderId;
+    if (inFolder) return inFolder.includes(n.folderId);
     return true;
   }).filter(matchesSearch).filter(matchesColor));
 }
@@ -299,7 +466,8 @@ function viewTitle() {
   if (state.view === 'starred') return '我的最愛';
   if (state.view === 'trash') return '垃圾筒';
   if (state.view === 'vault') return '上鎖筆記';
-  return db.folders.find((f) => f.id === state.view)?.name || '所有筆記';
+  if (state.view === 'uncategorized') return '未分類';
+  return folderLabel(state.view) || '所有筆記';
 }
 
 function renderVaultGate(show) {
@@ -337,7 +505,7 @@ function renderList() {
   $('#btn-sel-restore').classList.toggle('hidden', !inTrash);
   $('#btn-sel-color').classList.toggle('hidden', inTrash);
   $$('#color-filter button').forEach((b) => b.classList.toggle('on', b.dataset.cf === (state.colorFilter || '')));
-  $('#btn-sel-move').classList.toggle('hidden', inTrash || inVault);
+  $('#btn-sel-move').classList.toggle('hidden', inTrash);
   $('#btn-sel-vault').classList.toggle('hidden', inTrash || inVault);
   $('#btn-sel-unvault').classList.toggle('hidden', !inVault);
   $('#btn-sel-delete').lastChild.textContent = inTrash || inVault ? '永久刪除' : '刪除';
@@ -362,7 +530,7 @@ function renderList() {
     const card = document.createElement('div');
     card.className = 'note-card' + (n.color ? ` c-${n.color}` : '') + (state.selected.has(n.id) ? ' selected' : '');
     card.dataset.id = n.id;
-    card.draggable = !inTrash && !inVault;
+    card.draggable = !inTrash;
     const img = firstImage(n.html);
     const snippet = (n.text || '').slice(0, 220);
     const dateText = inTrash
@@ -421,9 +589,11 @@ function setView(view) {
 async function lockVault() {
   if (!vault.unlocked) return;
   if (currentInVault()) closeEditor();
+  if (inVaultView()) state.view = 'vault';
   clearTimeout(saveTimer);
-  await api.vault.save(vault.notes);
+  await api.vault.save(vaultPayload());
   vault.notes = [];
+  vault.folders = [];
   vault.unlocked = false;
   await api.vault.lock();
   if (inVaultView()) { state.selecting = false; state.selected.clear(); }
@@ -440,29 +610,96 @@ async function ensureVaultUnlocked() {
   }
   const pw = await openModal({ title: '輸入上鎖筆記密碼', input: '', password: true, okText: '解鎖' });
   if (!pw) return false;
-  const notes = await api.vault.unlock(pw);
-  if (!notes) { toast('密碼錯誤'); return false; }
-  vault.notes = notes;
+  const payload = await api.vault.unlock(pw);
+  if (!payload) { toast('密碼錯誤'); return false; }
+  vault.notes = payload.notes;
+  vault.folders = payload.folders;
+  repairFolders('vault');
   vault.unlocked = true;
   return true;
 }
 
-async function moveToVault(ids) {
+// folderFor(note) → vault folder id for that note (or null).
+async function moveToVault(ids, folderFor = () => null, { silent = false } = {}) {
   if (!(await ensureVaultUnlocked())) return false;
+  if (typeof folderFor !== 'function') { const fid = folderFor; folderFor = () => fid; }
   const moving = db.notes.filter((n) => ids.includes(n.id));
   for (const n of moving) {
     const html = await api.vault.importImages(n.html);
-    vault.notes.push({ ...n, html, folderId: null, starred: false, deletedAt: null });
+    vault.notes.push({ ...n, html, folderId: folderFor(n), starred: false, deletedAt: null });
   }
   db.notes = db.notes.filter((n) => !ids.includes(n.id));
   clearTimeout(saveTimer);
-  await api.vault.save(vault.notes);
+  await api.vault.save(vaultPayload());
   // Overwrite notes.json and its backup so no plaintext copy remains, then
   // remove the now-unused plain image files.
   await api.save(db, { scrub: true });
   await api.cleanupImages();
-  toast(`已移到上鎖筆記（${moving.length} 則）`);
+  if (!silent) toast(`已移到上鎖筆記（${moving.length} 則）`);
   return true;
+}
+
+// Copy a folder (and its subfolders) into the other scope; returns old→new id map.
+function copyFolderTree(id, toScope) {
+  const f = findFolder(id);
+  const map = {};
+  const top = { id: uid(), name: f.name, createdAt: Date.now(), parentId: null, order: childrenOf(toScope, null).length };
+  foldersOf(toScope).push(top);
+  map[id] = top.id;
+  foldersOf(folderScope(id)).filter((k) => k.parentId === id).forEach((k, i) => {
+    const c = { id: uid(), name: k.name, createdAt: Date.now(), parentId: top.id, order: i };
+    foldersOf(toScope).push(c);
+    map[k.id] = c.id;
+  });
+  return map;
+}
+
+async function moveFolderToVault(id) {
+  const f = findFolder(id);
+  const ids = folderAndChildrenIds(id);
+  const inside = db.notes.filter((n) => ids.includes(n.folderId) && !n.deletedAt);
+  const subs = ids.length - 1;
+  const ok = await openModal({
+    title: `把資料夾「${f.name}」移到上鎖筆記？`,
+    text: `${subs ? `含 ${subs} 個子資料夾、` : ''}共 ${inside.length} 則筆記會加密保存，資料夾結構保留。`,
+    okText: '移到上鎖筆記',
+  });
+  if (!ok || !(await ensureVaultUnlocked())) return;
+  const map = copyFolderTree(id, 'vault');
+  await moveToVault(inside.map((n) => n.id), (n) => map[n.folderId], { silent: true });
+  db.folders = db.folders.filter((x) => !ids.includes(x.id));
+  for (const n of db.notes) if (ids.includes(n.folderId)) n.folderId = null; // trashed ones
+  if (ids.includes(db.defaultFolderId)) db.defaultFolderId = null;
+  normalizeOrders('db', f.parentId || null);
+  if (ids.includes(state.view)) state.view = map[state.view];
+  await persist(true);
+  await api.save(db, { scrub: true });
+  render();
+  toast(`已把「${f.name}」移到上鎖筆記`);
+}
+
+async function moveFolderOutOfVault(id) {
+  const f = findFolder(id);
+  const ids = folderAndChildrenIds(id);
+  const inside = vault.notes.filter((n) => ids.includes(n.folderId));
+  const ok = await openModal({
+    title: `把「${f.name}」移出上鎖筆記？`,
+    text: `${inside.length} 則筆記會變回一般筆記（不再加密），資料夾結構保留。`,
+    okText: '移出',
+  });
+  if (!ok) return;
+  const map = copyFolderTree(id, 'db');
+  for (const n of inside) {
+    const html = await api.vault.exportImages(n.html);
+    db.notes.push({ ...n, html, folderId: map[n.folderId], deletedAt: null });
+  }
+  vault.notes = vault.notes.filter((n) => !inside.includes(n));
+  vault.folders = vault.folders.filter((x) => !ids.includes(x.id));
+  normalizeOrders('vault', f.parentId || null);
+  if (ids.includes(state.view)) state.view = map[state.view];
+  await persist(true);
+  render();
+  toast(`已把「${f.name}」移出上鎖筆記`);
 }
 
 async function moveOutOfVault(ids) {
@@ -514,17 +751,21 @@ $('#vault-gate').addEventListener('submit', async (e) => {
       if (pw.length < 4) { err.textContent = '密碼至少 4 個字元'; return; }
       if (pw !== $('#vault-pw2').value) { err.textContent = '兩次輸入的密碼不一樣'; return; }
       btn.textContent = '建立中…';
-      vault.notes = await api.vault.create(pw);
+      const payload = await api.vault.create(pw);
+      vault.notes = payload.notes;
+      vault.folders = payload.folders;
       vault.exists = true;
     } else {
       btn.textContent = '解鎖中…';
-      const notes = await api.vault.unlock(pw);
-      if (!notes) {
+      const payload = await api.vault.unlock(pw);
+      if (!payload) {
         err.textContent = '密碼錯誤';
         $('#vault-pw').select();
         return;
       }
-      vault.notes = notes;
+      vault.notes = payload.notes;
+      vault.folders = payload.folders;
+      repairFolders('vault');
     }
     vault.unlocked = true;
     $('#vault-pw').value = '';
@@ -545,7 +786,11 @@ function createNote(html = '') {
   const now = Date.now();
   const toVault = inVaultView() && vault.unlocked;
   if (inVaultView() && !vault.unlocked) state.view = 'all';
-  const folderId = db.folders.some((f) => f.id === state.view) ? state.view : null;
+  let folderId = null;
+  if (findFolder(state.view)) folderId = state.view; // current folder (normal or locked)
+  else if (!toVault && state.view !== 'uncategorized' && db.folders.some((f) => f.id === db.defaultFolderId)) {
+    folderId = db.defaultFolderId;
+  }
   const n = {
     id: uid(), title: '', html, text: htmlToText(html), folderId,
     starred: state.view === 'starred', createdAt: now, updatedAt: now, deletedAt: null,
@@ -592,16 +837,17 @@ async function destroyNotes(ids) {
 }
 
 async function moveNotes(ids) {
-  const opts = folderOptions();
+  const scope = vault.notes.some((n) => ids.includes(n.id)) ? 'vault' : 'db';
+  const opts = folderOptions(scope);
   opts.push({ value: '__new__', label: '＋ 新增資料夾…' });
   let target = await openModal({ title: '移動到資料夾', options: opts, okText: '移動' });
   if (target === null) return false;
   if (target === '__new__') {
-    const f = await newFolder();
+    const f = await newFolder(scope);
     if (!f) return false;
     target = f.id;
   }
-  for (const n of db.notes) if (ids.includes(n.id)) n.folderId = target || null;
+  for (const n of notesOf(scope)) if (ids.includes(n.id)) n.folderId = target || null;
   persist();
   return true;
 }
@@ -612,6 +858,7 @@ function noteContextMenu(e, id) {
     showContextMenu(e.clientX, e.clientY, [
       { swatches: true, current: n.color, pick: (c) => { setNoteColor([id], c); render(); } },
       { label: '開啟', action: () => openEditor(id) },
+      { label: '移動到資料夾…', action: async () => { if (await moveNotes([id])) render(); } },
       { label: '移出上鎖筆記', action: async () => { await moveOutOfVault([id]); render(); } },
       { label: '永久刪除', danger: true, action: async () => { if (await destroyVaultNotes([id])) render(); } },
     ]);
@@ -658,13 +905,13 @@ function openEditor(id) {
   $('#save-state').textContent = '';
   const sel = $('#note-folder');
   sel.innerHTML = '';
-  for (const o of folderOptions()) sel.add(new Option(o.label, o.value));
+  for (const o of folderOptions(isVaultNote(n) ? 'vault' : 'db')) sel.add(new Option(o.label, o.value));
   sel.value = n.folderId || '';
   $('#btn-star').classList.toggle('on', !!n.starred);
   $$('#note-colors button').forEach((b) => b.classList.toggle('on', b.dataset.c === (n.color || '')));
   const locked = isVaultNote(n);
   $('#vault-badge').classList.toggle('hidden', !locked);
-  for (const sel of ['#note-folder', '#btn-star', '#btn-export']) $(sel).classList.toggle('hidden', locked);
+  for (const sel of ['#btn-star', '#btn-export']) $(sel).classList.toggle('hidden', locked);
   $('#btn-delete-note').title = locked ? '永久刪除' : '刪除筆記';
   hideImageBar();
   renderSidebar();
@@ -1228,55 +1475,153 @@ $('#notes').addEventListener('dragstart', (e) => {
   e.dataTransfer.setData('application/x-note-ids', JSON.stringify(ids));
   e.dataTransfer.effectAllowed = 'move';
 });
-$('#sidebar').addEventListener('dragover', (e) => {
-  const item = e.target.closest('.nav-item');
-  if (!item || !e.dataTransfer.types.includes('application/x-note-ids') || item.dataset.view === 'starred') return;
-  e.preventDefault();
-  $$('.nav-item.drop-target').forEach((x) => x.classList.remove('drop-target'));
-  item.classList.add('drop-target');
-});
-$('#sidebar').addEventListener('dragleave', (e) => {
-  e.target.closest?.('.nav-item')?.classList.remove('drop-target');
-});
-$('#sidebar').addEventListener('drop', (e) => {
-  $$('.nav-item.drop-target').forEach((x) => x.classList.remove('drop-target'));
-  const item = e.target.closest('.nav-item');
-  const raw = e.dataTransfer.getData('application/x-note-ids');
-  if (!item || !raw) return;
-  e.preventDefault();
-  const ids = JSON.parse(raw);
-  const v = item.dataset.view;
-  if (v === 'vault') {
-    moveToVault(ids).then(() => { state.selected.clear(); render(); });
-    return;
+// Sidebar drag & drop:
+//  - notes onto 所有筆記/未分類/a folder/上鎖筆記/a locked folder/垃圾筒
+//  - folders: between two folders = reorder; onto a top-level folder = become
+//    its subfolder; onto the 資料夾 header = top level; onto 上鎖筆記 = lock it.
+let dragFolderId = null;
+function clearDropMarks() {
+  $$('.drop-target, .drop-before, .drop-after').forEach((x) => x.classList.remove('drop-target', 'drop-before', 'drop-after'));
+}
+
+function folderDrop(e, target) {
+  const src = findFolder(dragFolderId);
+  if (!src) return null;
+  const scope = folderScope(src.id);
+  const srcHasKids = hasChildren(src.id);
+  if (target.classList.contains('nav-section')) {
+    return scope === 'db' ? { mark: 'drop-target', run: () => placeFolder(src.id, null, null) } : null;
   }
-  if (v === 'trash') trashNotes(ids);
-  else {
-    for (const n of db.notes) if (ids.includes(n.id)) n.folderId = v === 'all' ? null : v;
+  const v = target.dataset.view;
+  if (v === 'vault') {
+    return scope === 'db'
+      ? { mark: 'drop-target', run: () => moveFolderToVault(src.id) }
+      : { mark: 'drop-target', run: () => placeFolder(src.id, null, null) };
+  }
+  const t = findFolder(v);
+  if (!t || t.id === src.id || folderScope(t.id) !== scope) return null;
+  const r = target.getBoundingClientRect();
+  const pos = (e.clientY - r.top) / r.height;
+  if (pos > 0.28 && pos < 0.72 && !t.parentId) {
+    if (srcHasKids || t.id === src.parentId) return null; // max two levels / already there
+    return { mark: 'drop-target', run: () => placeFolder(src.id, t.id, null) };
+  }
+  const parent = t.parentId || null;
+  if (parent && srcHasKids) return null;
+  const sibs = childrenOf(scope, parent).filter((x) => x.id !== src.id);
+  const before = pos <= 0.5 ? t.id : (sibs[sibs.findIndex((x) => x.id === t.id) + 1]?.id || null);
+  return { mark: pos <= 0.5 ? 'drop-before' : 'drop-after', run: () => placeFolder(src.id, parent, before) };
+}
+
+async function dropNotes(ids, v) {
+  const fromVault = vault.notes.some((n) => ids.includes(n.id));
+  const toVault = v === 'vault' || folderScope(v) === 'vault';
+  if (fromVault) {
+    if (!toVault) { toast('上鎖筆記要移出，請按右鍵「移出上鎖筆記」'); return; }
+    for (const n of vault.notes) if (ids.includes(n.id)) n.folderId = v === 'vault' ? null : v;
+    persist();
+    toast(`已移動 ${ids.length} 則筆記`);
+  } else if (toVault) {
+    if (!(await moveToVault(ids, v === 'vault' ? null : v))) return;
+  } else if (v === 'trash') {
+    trashNotes(ids);
+  } else {
+    for (const n of db.notes) if (ids.includes(n.id)) n.folderId = v === 'all' || v === 'uncategorized' ? null : v;
     persist();
     toast(`已移動 ${ids.length} 則筆記`);
   }
   state.selected.clear();
   render();
+}
+
+$('#sidebar').addEventListener('dragstart', (e) => {
+  const row = e.target.closest?.('.folder-item');
+  if (!row) return;
+  dragFolderId = row.dataset.folder;
+  e.dataTransfer.setData('application/x-folder-id', dragFolderId);
+  e.dataTransfer.effectAllowed = 'move';
+});
+$('#sidebar').addEventListener('dragend', () => { dragFolderId = null; clearDropMarks(); });
+$('#sidebar').addEventListener('dragover', (e) => {
+  const types = [...e.dataTransfer.types];
+  const target = e.target.closest?.('.nav-item, .nav-section');
+  clearDropMarks();
+  if (!target) return;
+  if (types.includes('application/x-folder-id')) {
+    const act = folderDrop(e, target);
+    if (!act) return;
+    e.preventDefault();
+    target.classList.add(act.mark);
+  } else if (types.includes('application/x-note-ids')) {
+    const v = target.dataset.view;
+    if (!v || v === 'starred') return;
+    e.preventDefault();
+    target.classList.add('drop-target');
+  }
+});
+$('#sidebar').addEventListener('dragleave', (e) => {
+  if (!e.relatedTarget || !$('#sidebar').contains(e.relatedTarget)) clearDropMarks();
+});
+$('#sidebar').addEventListener('drop', (e) => {
+  const target = e.target.closest?.('.nav-item, .nav-section');
+  if ([...e.dataTransfer.types].includes('application/x-folder-id')) {
+    const act = target && folderDrop(e, target);
+    clearDropMarks();
+    dragFolderId = null;
+    if (!act) return;
+    e.preventDefault();
+    act.run();
+    return;
+  }
+  clearDropMarks();
+  const raw = e.dataTransfer.getData('application/x-note-ids');
+  if (!target || !raw || !target.dataset.view) return;
+  e.preventDefault();
+  dropNotes(JSON.parse(raw), target.dataset.view);
 });
 
 $('#sidebar').addEventListener('click', (e) => {
+  const toggle = e.target.closest('[data-toggle]');
+  if (toggle) {
+    e.preventDefault();
+    const id = toggle.dataset.toggle;
+    if (state.prefs.collapsed[id]) delete state.prefs.collapsed[id]; else state.prefs.collapsed[id] = true;
+    savePrefs();
+    renderSidebar();
+    return;
+  }
+  if (e.target.closest('#btn-new-vault-folder')) {
+    e.preventDefault();
+    newFolder('vault');
+    return;
+  }
   const item = e.target.closest('.nav-item');
   if (item) setView(item.dataset.view);
 });
-$('#folder-list').addEventListener('contextmenu', (e) => {
-  const item = e.target.closest('.nav-item');
-  if (!item) return;
-  e.preventDefault();
-  const id = item.dataset.view;
-  showContextMenu(e.clientX, e.clientY, [
-    { label: '重新命名', action: () => renameFolder(id) },
-    { label: '刪除資料夾', danger: true, action: () => deleteFolder(id) },
-  ]);
+$('#sidebar').addEventListener('contextmenu', (e) => {
+  const row = e.target.closest('.folder-item');
+  if (row) {
+    e.preventDefault();
+    folderContextMenu(e, row.dataset.folder);
+    return;
+  }
+  if (e.target.closest('.nav-item[data-view="vault"]')) {
+    if (!vault.unlocked) return;
+    e.preventDefault();
+    showContextMenu(e.clientX, e.clientY, [
+      { label: '新增上鎖資料夾', action: () => newFolder('vault') },
+      { label: '立即上鎖', action: () => { lockVault(); toast('已上鎖'); } },
+    ]);
+    return;
+  }
+  if (e.target.closest('.nav-section, #folder-list') || e.target.tagName === 'NAV') {
+    e.preventDefault();
+    showContextMenu(e.clientX, e.clientY, [{ label: '新增資料夾', action: () => newFolder('db') }]);
+  }
 });
-$('#folder-list').addEventListener('dblclick', (e) => {
-  const item = e.target.closest('.nav-item');
-  if (item) renameFolder(item.dataset.view);
+$('#sidebar').addEventListener('dblclick', (e) => {
+  const row = e.target.closest('.folder-item');
+  if (row && !e.target.closest('[data-toggle]')) renameFolder(row.dataset.folder);
 });
 $('#btn-new-folder').addEventListener('click', (e) => { e.stopPropagation(); newFolder(); });
 $('#btn-toggle-sidebar').addEventListener('click', () => {
@@ -1402,7 +1747,7 @@ async function importOutlook() {
   const FOLDER = 'Outlook 記事';
   let folder = db.folders.find((f) => f.name === FOLDER);
   if (!folder) {
-    folder = { id: uid(), name: FOLDER, createdAt: Date.now() };
+    folder = { id: uid(), name: FOLDER, createdAt: Date.now(), parentId: null, order: childrenOf('db', null).length };
     db.folders.push(folder);
   }
   // CSV has no dates; keep the file's order under the default "newest first" sort.
@@ -1580,6 +1925,8 @@ api.onNewNote(() => { if (state.currentId) closeEditor(); createNote(); });
   db = await api.load();
   db.folders ||= [];
   db.notes ||= [];
+  repairFolders('db');
+  state.prefs.collapsed ||= {};
   vault.exists = (await api.vault.status()).exists;
   if (purgeOldTrash()) { await persist(true); api.cleanupImages(); }
   render();

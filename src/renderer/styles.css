@@ -35,7 +35,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 #sidebar nav { flex: 1; overflow-y: auto; margin-top: 16px; }
 #sidebar.collapsed { width: 64px; }
 #sidebar.collapsed nav span, #sidebar.collapsed nav em, #sidebar.collapsed .nav-section,
-#sidebar.collapsed #folder-list, #sidebar.collapsed hr, #sidebar.collapsed .sidebar-foot { display: none; }
+#sidebar.collapsed #folder-list, #sidebar.collapsed #vault-folder-list, #sidebar.collapsed hr, #sidebar.collapsed .sidebar-foot { display: none; }
 .nav-item {
   display: flex; align-items: center; gap: 14px; padding: 12px 12px; border-radius: 10px;
   cursor: pointer; font-size: 17px; user-select: none; color: var(--text);
@@ -49,8 +49,23 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .nav-section { display: flex; align-items: center; justify-content: space-between; padding: 6px 12px; color: var(--muted); font-size: 14px; }
 .nav-section span { display: flex; align-items: center; gap: 10px; }
 .nav-section svg { width: 18px; height: 18px; }
-#folder-list .nav-item { padding-left: 22px; font-size: 16px; }
-#folder-list .nav-item svg { width: 20px; height: 20px; }
+#folder-list .nav-item, #vault-folder-list .nav-item { padding: 9px 12px 9px 6px; font-size: 16px; gap: 10px; }
+#vault-folder-list .nav-item { padding-left: 24px; font-size: 15px; }
+#folder-list .nav-item.sub { padding-left: 48px; font-size: 15px; }
+#vault-folder-list .nav-item.sub { padding-left: 64px; }
+.folder-item .caret {
+  width: 18px; flex: none; background: none; border: 0; color: var(--muted); cursor: pointer; padding: 0;
+  font-size: 12px; text-align: center; border-radius: 4px; display: inline-block;
+}
+.folder-item button.caret:hover { background: #3a3a3a; color: var(--text); }
+.folder-item .default-tag { font-size: 11px; color: var(--accent); border: 1px solid #6a5420; border-radius: 8px; padding: 0 6px; }
+.nav-item.drop-before { box-shadow: inset 0 3px 0 var(--accent); }
+.nav-item.drop-after { box-shadow: inset 0 -3px 0 var(--accent); }
+.nav-section.drop-target { outline: 2px dashed var(--accent); border-radius: 8px; }
+.nav-item .row-add { padding: 2px; margin-right: -4px; }
+.nav-item .row-add svg { width: 16px; height: 16px; }
+#folder-list .nav-item svg, #vault-folder-list .nav-item svg { width: 20px; height: 20px; }
+.nav-item .row-add svg { width: 16px; height: 16px; }
 .trash-bottom { border-top: 1px dashed #555; border-radius: 0 0 10px 10px; margin-top: 8px; padding-top: 14px; }
 #sidebar.collapsed .trash-bottom span, #sidebar.collapsed .trash-bottom em { display: none; }
 .import-btn {
@@ -86,7 +101,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 /* ---------- list view ---------- */
 #list-view, #editor-view { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .topbar { display: flex; align-items: center; gap: 12px; padding: 18px 28px 6px 44px; }
-.topbar h1 { flex: none; max-width: 30%; font-size: 30px; margin: 0 auto 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.topbar h1 { flex: none; max-width: 24%; font-size: 30px; margin: 0 auto 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .actions { display: flex; align-items: center; gap: 4px; }
 #select-count { color: var(--muted); margin-right: 8px; }
 .search {

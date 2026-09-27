@@ -3,7 +3,7 @@
 // - Key: scrypt(password, random salt) -> 256-bit key. The password itself is
 //   never stored; a wrong password simply fails GCM authentication.
 // - vault.enc: JSON envelope { kdf params, salt, iv, tag, data } where data is
-//   AES-256-GCM encrypted JSON of the locked notes.
+//   AES-256-GCM encrypted JSON { notes, folders } of the locked notes.
 // - vault-images/<name>: each image encrypted as iv(12) | tag(16) | ciphertext.
 // - The derived key lives only in memory while the vault is unlocked.
 
@@ -58,8 +58,10 @@ class Vault {
     };
   }
 
-  writeNotes(notes, key = this.key, meta = this.meta) {
-    const { iv, tag, data } = Vault.encrypt(key, Buffer.from(JSON.stringify({ notes }), 'utf8'));
+  // payload = { notes, folders }
+  writePayload(payload, key = this.key, meta = this.meta) {
+    const body = { notes: payload.notes || [], folders: payload.folders || [] };
+    const { iv, tag, data } = Vault.encrypt(key, Buffer.from(JSON.stringify(body), 'utf8'));
     const env = {
       version: 1, kdf: 'scrypt', N: meta.N, r: meta.r, p: meta.p,
       salt: meta.salt.toString('base64'),
@@ -75,13 +77,13 @@ class Vault {
     if (this.exists()) throw new Error('vault already exists');
     const meta = { ...KDF, salt: crypto.randomBytes(16) };
     const key = await Vault.deriveKey(password, meta.salt, meta);
-    this.writeNotes([], key, meta);
+    this.writePayload({}, key, meta);
     this.key = key;
     this.meta = meta;
-    return [];
+    return { notes: [], folders: [] };
   }
 
-  // Returns the notes, or null when the password is wrong.
+  // Returns { notes, folders }, or null when the password is wrong.
   async unlock(password) {
     const env = this.readEnvelope();
     const key = await Vault.deriveKey(password, env.salt, env);
@@ -93,7 +95,8 @@ class Vault {
     }
     this.key = key;
     this.meta = { N: env.N, r: env.r, p: env.p, salt: env.salt };
-    return JSON.parse(plain.toString('utf8')).notes || [];
+    const body = JSON.parse(plain.toString('utf8'));
+    return { notes: body.notes || [], folders: body.folders || [] };
   }
 
   lock() {
@@ -106,15 +109,15 @@ class Vault {
     this.meta = null;
   }
 
-  save(notes) {
+  save(payload) {
     if (!this.key) throw new Error('vault is locked');
-    this.writeNotes(notes);
-    this.lastNotes = notes;
+    this.writePayload(payload);
+    this.lastNotes = payload.notes || [];
   }
 
   async changePassword(oldPassword, newPassword) {
-    const notes = await this.unlock(oldPassword);
-    if (!notes) return false;
+    const payload = await this.unlock(oldPassword);
+    if (!payload) return false;
     const oldKey = this.key;
     const meta = { ...KDF, salt: crypto.randomBytes(16) };
     const newKey = await Vault.deriveKey(newPassword, meta.salt, meta);
@@ -123,7 +126,7 @@ class Vault {
       const plain = this.readImageWith(oldKey, p);
       fs.writeFileSync(p, Vault.packImage(newKey, plain));
     }
-    this.writeNotes(notes, newKey, meta);
+    this.writePayload(payload, newKey, meta);
     fs.rmSync(`${this.file}.bak`, { force: true });
     this.key = newKey;
     this.meta = meta;

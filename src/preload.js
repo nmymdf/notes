@@ -10,7 +10,7 @@ contextBridge.exposeInMainWorld('notesAPI', {
     status: () => ipcRenderer.invoke('vault:status'),
     create: (password) => ipcRenderer.invoke('vault:create', password),
     unlock: (password) => ipcRenderer.invoke('vault:unlock', password),
-    save: (notes) => ipcRenderer.invoke('vault:save', notes),
+    save: (payload) => ipcRenderer.invoke('vault:save', payload),
     lock: () => ipcRenderer.invoke('vault:lock'),
     changePassword: (oldPw, newPw) => ipcRenderer.invoke('vault:change-password', oldPw, newPw),
     importImages: (html) => ipcRenderer.invoke('vault:import-images', html),

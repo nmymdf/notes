@@ -192,7 +192,7 @@ function registerIpc() {
   ipcMain.handle('vault:status', () => ({ exists: vault.exists(), unlocked: vault.unlocked }));
   ipcMain.handle('vault:create', (_e, password) => vault.create(password));
   ipcMain.handle('vault:unlock', (_e, password) => vault.unlock(password));
-  ipcMain.handle('vault:save', (_e, notes) => { vault.save(notes); return true; });
+  ipcMain.handle('vault:save', (_e, payload) => { vault.save(payload); return true; });
   ipcMain.handle('vault:lock', () => { vault.lock(); return true; });
   ipcMain.handle('vault:change-password', (_e, oldPw, newPw) => vault.changePassword(oldPw, newPw));
   // Moving a note in/out of the vault re-stores its images encrypted/plain.
