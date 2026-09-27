@@ -30,12 +30,16 @@ const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&l
 // On Android the WebView can't load note-img:// URLs, so api.resolveImage turns
 // them into displayable ones. The stored URL is kept in data-src and restored
 // before the HTML is saved. On the desktop both helpers do nothing.
+// The src attribute stays in place (with an empty picture until the real one
+// is ready), so the saved HTML is exactly the original when nothing was edited;
+// otherwise just opening a note on the phone would count as a change.
+const BLANK_IMG = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
 function hydrateImages(root) {
   if (!api.resolveImage) return;
   for (const img of root.querySelectorAll('img[src^="note-img:"]')) {
     const src = img.getAttribute('src');
     img.dataset.src = src;
-    img.removeAttribute('src');
+    img.setAttribute('src', BLANK_IMG);
     api.resolveImage(src).then((url) => { if (url && img.dataset.src === src) img.src = url; });
   }
 }
@@ -1345,12 +1349,15 @@ function closeEditor() {
   render();
 }
 
+// Selecting a picture only adds/removes a class; that alone isn't an edit.
+const sameHtml = (a, b) => a.replace(/ class="(selected)?"/g, '') === b.replace(/ class="(selected)?"/g, '');
+
 function flushEditor() {
   const n = findNote(state.currentId);
   if (!n) return;
-  const html = dehydrateHtml(editor.innerHTML);
+  const html = dehydrateHtml(editor.innerHTML).replace(/ class="selected"/g, '');
   const title = $('#note-title').value;
-  if (n.html === html && n.title === title) return;
+  if (sameHtml(n.html, html) && n.title === title) return;
   n.html = html;
   n.title = title;
   n.text = htmlToText(html);
