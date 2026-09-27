@@ -17,6 +17,7 @@ esbuild.buildSync({
   target: 'es2020',
   minify: true,
   outfile: path.join(www, 'platform.js'),
+  define: { __APP_VERSION__: JSON.stringify(require(path.join(root, 'package.json')).version) },
 });
 
 const indexFile = path.join(www, 'index.html');

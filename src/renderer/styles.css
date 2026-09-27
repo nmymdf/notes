@@ -429,6 +429,8 @@ html:not(.mobile) .mobile-only { display: none !important; }
 .lb-btn { position: absolute; top: calc(env(safe-area-inset-top) + 10px); z-index: 1; width: 44px; height: 44px;
   border: 0; border-radius: 50%; background: #000a; color: #fff; font-size: 20px; }
 .lb-close { right: 12px; }
+.lb-zoom { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(env(safe-area-inset-bottom) + 20px); z-index: 1; display: flex; gap: 16px; }
+.lb-zoom .lb-btn { position: static; width: 56px; height: 56px; font-size: 28px; font-weight: 700; }
 .lb-delete { right: 64px; }
 .lightbox img { max-width: 94vw; max-height: 94vh; border-radius: 6px; }
 
@@ -454,7 +456,7 @@ html:not(.mobile) .mobile-only { display: none !important; }
 .mobile body { -webkit-tap-highlight-color: transparent; }
 .mobile #app { padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); height: 100vh; }
 .mobile #btn-new-voice-note, .mobile #btn-voice, .mobile #btn-voice + i, .mobile #btn-on-top, .mobile #btn-export,
-.mobile #btn-import-outlook, .mobile #btn-undo-import, .mobile .sidebar-foot, .mobile #btn-toggle-sidebar { display: none !important; }
+.mobile #btn-import-outlook, .mobile #btn-undo-import, .mobile #btn-toggle-sidebar { display: none !important; }
 
 /* sidebar becomes a slide-in drawer */
 .mobile #sidebar {

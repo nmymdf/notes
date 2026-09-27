@@ -1602,7 +1602,7 @@ function makeZoomable(box) {
   let moved = false;
   let lastTap = { t: 0, x: 0, y: 0 };
 
-  const maxZoom = () => Math.max(4, ((img.naturalWidth || fitW) / fitW) * 2);
+  const maxZoom = () => Math.max(8, ((img.naturalWidth || fitW) / fitW) * 4); // up to 8x, more for big pictures
   function clamp() {
     s = Math.min(Math.max(s, 1), maxZoom());
     const mx = Math.max(0, (fitW * s - box.clientWidth) / 2);
@@ -1618,8 +1618,9 @@ function makeZoomable(box) {
     img.style.height = `${h}px`;
     img.style.transform = `translate(${(box.clientWidth - w) / 2 + x}px, ${(box.clientHeight - h) / 2 + y}px)`;
   }
+  const ensureFit = () => { if (!fitW) fit(); };
   function fit() {
-    if (!img || !img.naturalWidth) return;
+    if (!img || !img.naturalWidth || !box.clientWidth) return;
     const k = Math.min(box.clientWidth / img.naturalWidth, box.clientHeight / img.naturalHeight);
     fitW = img.naturalWidth * k;
     fitH = img.naturalHeight * k;
@@ -1633,7 +1634,6 @@ function makeZoomable(box) {
     y = py - (py - from.y) * (s / from.s);
     clamp();
   }
-  const rel = (e) => { const r = box.getBoundingClientRect(); return [e.clientX - r.left - r.width / 2, e.clientY - r.top - r.height / 2]; };
   const mid = () => { const [a, b] = [...pts.values()]; return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, Math.hypot(a[0] - b[0], a[1] - b[1]) || 1]; };
   function startGesture() {
     if (pts.size >= 2) gesture = { pinch: true, m: mid(), s, x, y };
@@ -1641,18 +1641,46 @@ function makeZoomable(box) {
     else gesture = null;
   }
 
-  box.addEventListener('pointerdown', (e) => {
+  // Real phones: touch events (with preventDefault) are the most dependable way
+  // to get every finger, so the WebView never turns them into scrolling.
+  const setTouches = (touches) => {
+    const r = box.getBoundingClientRect();
+    pts.clear();
+    for (const t of [...touches].slice(0, 2)) pts.set(t.identifier, [t.clientX - r.left - r.width / 2, t.clientY - r.top - r.height / 2]);
+  };
+  box.addEventListener('touchstart', (e) => {
     if (!img || e.target.closest('button')) return;
-    box.setPointerCapture(e.pointerId);
-    pts.set(e.pointerId, rel(e));
-    if (pts.size === 1) moved = false;
+    e.preventDefault();
+    ensureFit();
+    if (e.touches.length === 1) moved = false;
+    setTouches(e.touches);
     startGesture();
-  });
-  box.addEventListener('pointermove', (e) => {
-    if (!pts.has(e.pointerId) || !gesture) return;
-    pts.set(e.pointerId, rel(e));
+  }, { passive: false });
+  box.addEventListener('touchmove', (e) => {
+    if (!img || !gesture) return;
+    e.preventDefault();
+    setTouches(e.touches);
     update();
-  });
+  }, { passive: false });
+  const touchEnd = (e) => {
+    if (!img || !gesture) return;
+    const t = e.changedTouches[0];
+    const r = box.getBoundingClientRect();
+    const p = [t.clientX - r.left - r.width / 2, t.clientY - r.top - r.height / 2];
+    setTouches(e.touches);
+    startGesture();
+    if (e.touches.length || moved || e.type === 'touchcancel') return;
+    const now = Date.now();
+    if (now - lastTap.t < 350 && Math.hypot(p[0] - lastTap.x, p[1] - lastTap.y) < 50) {
+      if (s > 1.05) { s = 1; x = 0; y = 0; } else zoomAt(Math.min(3, maxZoom()), p[0], p[1]);
+      apply();
+      lastTap = { t: 0, x: 0, y: 0 };
+    } else {
+      lastTap = { t: now, x: p[0], y: p[1] };
+    }
+  };
+  box.addEventListener('touchend', touchEnd);
+  box.addEventListener('touchcancel', touchEnd);
   function update() {
     if (gesture.pinch && pts.size >= 2) {
       const [mx, my, d] = mid();
@@ -1662,7 +1690,7 @@ function makeZoomable(box) {
       y += my - m0y;
       clamp();
       moved = true;
-    } else if (!gesture.pinch) {
+    } else if (!gesture.pinch && pts.size) {
       const [px, py] = [...pts.values()][0];
       const dx = px - gesture.p[0];
       const dy = py - gesture.p[1];
@@ -1673,34 +1701,20 @@ function makeZoomable(box) {
     }
     apply();
   }
-  const up = (e) => {
-    if (!pts.has(e.pointerId)) return;
-    const p = pts.get(e.pointerId);
-    pts.delete(e.pointerId);
-    startGesture();
-    if (pts.size || moved || e.type === 'pointercancel') return;
-    const now = Date.now();
-    if (now - lastTap.t < 320 && Math.hypot(p[0] - lastTap.x, p[1] - lastTap.y) < 40) {
-      if (s > 1.05) { s = 1; x = 0; y = 0; } else zoomAt(Math.min(3, maxZoom()), p[0], p[1]);
-      apply();
-      lastTap = { t: 0, x: 0, y: 0 };
-    } else {
-      lastTap = { t: now, x: p[0], y: p[1] };
-    }
-  };
-  box.addEventListener('pointerup', up);
-  box.addEventListener('pointercancel', up);
+  // ＋ / － buttons: always work, even without gestures.
+  box.querySelectorAll('[data-zoom]').forEach((b) => b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!img) return;
+    ensureFit();
+    zoomAt(b.dataset.zoom === 'in' ? s * 1.6 : s / 1.6, 0, 0);
+    apply();
+  }));
   window.addEventListener('resize', fit);
 
   // A pinch that started on the picture in the note continues here.
-  const touchPts = (touches) => {
-    const r = box.getBoundingClientRect();
-    pts.clear();
-    [...touches].slice(0, 2).forEach((t, i) => pts.set(`t${i}`, [t.clientX - r.left - r.width / 2, t.clientY - r.top - r.height / 2]));
-  };
   return {
-    pinchFrom(touches) { touchPts(touches); startGesture(); },
-    pinchTo(touches) { if (!gesture) return; touchPts(touches); if (pts.size >= 2) update(); },
+    pinchFrom(touches) { ensureFit(); setTouches(touches); startGesture(); },
+    pinchTo(touches) { if (!gesture) return; ensureFit(); setTouches(touches); if (pts.size >= 2) update(); },
     pinchEnd() { pts.clear(); gesture = null; },
     show(el) {
       img = el;
@@ -1711,12 +1725,13 @@ function makeZoomable(box) {
       box.classList.toggle('zoom-box', !!img);
       if (!img) return;
       img.draggable = false;
-      if (img.complete && img.naturalWidth) requestAnimationFrame(fit);
       img.onload = fit;
+      if (img.complete && img.naturalWidth) requestAnimationFrame(fit);
     },
   };
 }
 const lightboxZoom = IS_MOBILE ? makeZoomable($('#lightbox')) : null;
+if (api.version) $('.sidebar-foot').textContent = `DeskNotes 版本 ${api.version}`;
 let lightboxSource = null; // the picture in the note, for 刪除
 function openLightbox(src) {
   const img = $('#lightbox img');

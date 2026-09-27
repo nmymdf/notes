@@ -455,6 +455,7 @@ const filesApi = {
 const api = {
   platform: 'android',
   mobile: true,
+  version: __APP_VERSION__,
 
   async load() {
     await mkdirp(IMG_DIR);
