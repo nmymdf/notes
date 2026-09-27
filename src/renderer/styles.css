@@ -8,6 +8,7 @@
   --muted: #9a9a9a;
   --line: #3a3a3a;
   --accent: #ffb020;
+  --select: #3b82f6;
   --danger: #ff6b6b;
   --c-red: #e5484d;
   --c-yellow: #f2c037;
@@ -100,10 +101,10 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 
 /* ---------- list view ---------- */
 #list-view, #editor-view { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.topbar { display: flex; align-items: center; gap: 12px; padding: 18px 28px 6px 44px; }
+.topbar { display: flex; flex-wrap: wrap; row-gap: 6px; align-items: center; gap: 12px; padding: 18px 28px 6px 44px; }
 .topbar h1 { flex: none; max-width: 24%; font-size: 30px; margin: 0 auto 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.actions { display: flex; align-items: center; gap: 4px; }
-#select-count { color: var(--muted); margin-right: 8px; }
+.actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+#select-count { color: var(--muted); margin-right: 8px; white-space: nowrap; }
 .search {
   display: flex; align-items: center; background: #2a2a2a; border-radius: 22px;
   padding: 0 14px 0 20px; height: 44px; flex: 0 1 240px; min-width: 120px;
@@ -168,9 +169,9 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
   border: 2px solid #aaa; background: #0008; z-index: 1; display: none;
 }
 .selecting .note-card .check { display: block; }
-.note-card.selected .check { background: var(--accent); border-color: var(--accent); }
-.note-card.selected .check::after { content: "✓"; color: #111; font-weight: 700; display: block; text-align: center; line-height: 20px; }
-.note-card.selected .thumb { outline: 3px solid var(--accent); }
+.note-card.selected .check { background: var(--select); border-color: var(--select); }
+.note-card.selected .check::after { content: "✓"; color: #fff; font-weight: 700; display: block; text-align: center; line-height: 20px; }
+.note-card.selected .thumb { outline: 3px solid var(--select); }
 
 #notes.list .note-card { display: flex; align-items: center; gap: 16px; background: var(--panel); border-radius: 12px; padding: 10px 16px; }
 #notes.list .note-card:hover { background: var(--panel-2); }
@@ -190,7 +191,8 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 #notes.table .table-head { color: var(--muted); font-size: 13px; font-weight: 600; height: 34px; position: sticky; top: -14px; background: var(--bg); z-index: 1; }
 #notes.table .note-card { height: 40px; border-radius: 6px; }
 #notes.table .note-card:hover { background: var(--panel); }
-#notes.table .note-card.selected { background: #3a2f12; }
+#notes.table .note-card.selected { background: #15294a; }
+#notes.list .note-card.selected { background: #15294a; outline: 2px solid var(--select); }
 #notes.table .check { position: static; width: 18px; height: 18px; display: none; }
 #notes.table.selecting .check { display: block; }
 #notes.table.selecting .table-head, #notes.table.selecting .note-card { grid-template-columns: 18px minmax(120px, 28%) 1fr; }
@@ -352,6 +354,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 @media (max-width: 1250px) {
   .text-btn { font-size: 0; gap: 0; }
   .text-btn svg { width: 22px; height: 22px; }
-  #select-actions .text-btn:not(:has(svg)) { font-size: 15px; }
+  #select-actions .text-btn:not(:has(svg)) { font-size: 15px; gap: 6px; }
+  .topbar.selecting .search { display: none; }
   .search { width: 180px; }
 }

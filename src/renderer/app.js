@@ -502,6 +502,7 @@ function renderList() {
   renderVaultGate(gate);
   $('#normal-actions').classList.toggle('hidden', state.selecting);
   $('#select-actions').classList.toggle('hidden', !state.selecting);
+  $('.topbar').classList.toggle('selecting', state.selecting);
   $('#btn-sel-restore').classList.toggle('hidden', !inTrash);
   $('#btn-sel-color').classList.toggle('hidden', inTrash);
   $$('#color-filter button').forEach((b) => b.classList.toggle('on', b.dataset.cf === (state.colorFilter || '')));
