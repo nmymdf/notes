@@ -399,6 +399,7 @@ const filesApi = {
   async share(_folders, file) {
     await filesApi.clearShareCache();
     const path = `share/${file.name}`;
+    await Filesystem.mkdir({ path: 'share', directory: Directory.Cache, recursive: true }).catch(() => {});
     await Filesystem.copy({ from: `${FILES_DIR}/${file.id}`, to: path, directory: DIR, toDirectory: Directory.Cache });
     const { uri } = await Filesystem.getUri({ path, directory: Directory.Cache });
     try {
@@ -406,6 +407,23 @@ const filesApi = {
     } catch (err) {
       if (!/cancel/i.test(String(err && err.message))) throw err;
     }
+  },
+  // Copy to the phone's public 文件 (Documents)/DeskNotes folder, where the file
+  // manager and other apps can see it. Returns the folder shown to the user.
+  async copyToPhone(_folders, file) {
+    try { await Filesystem.requestPermissions(); } catch { /* not needed on Android 11+ */ }
+    const dir = 'DeskNotes';
+    await Filesystem.mkdir({ path: dir, directory: Directory.Documents, recursive: true }).catch(() => {});
+    const dot = file.name.lastIndexOf('.');
+    const base = dot > 0 ? file.name.slice(0, dot) : file.name;
+    const ext = dot > 0 ? file.name.slice(dot) : '';
+    let name = file.name;
+    for (let i = 2; ; i++) {
+      try { await Filesystem.stat({ path: `${dir}/${name}`, directory: Directory.Documents }); } catch { break; }
+      name = `${base} (${i})${ext}`;
+    }
+    await Filesystem.copy({ from: `${FILES_DIR}/${file.id}`, to: `${dir}/${name}`, directory: DIR, toDirectory: Directory.Documents });
+    return `文件（Documents）/DeskNotes/${name}`;
   },
   async clearShareCache() {
     try { await Filesystem.rmdir({ path: 'share', directory: Directory.Cache, recursive: true }); } catch { /* none */ }

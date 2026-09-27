@@ -694,7 +694,23 @@ async function openFile(f) {
     body.appendChild(pre);
   }
   $('#fp-share').onclick = () => shareFile(f);
+  $('#fp-copy').onclick = () => copyFileToPhone(f);
   $('#file-preview').classList.remove('hidden');
+}
+async function copyFileToPhone(f) {
+  syncOverlay.show('複製到手機中…');
+  try {
+    const where = await api.files.copyToPhone(db.folders, f);
+    syncOverlay.hide();
+    openModal({
+      title: '已複製到手機',
+      text: `${where}\n\n用手機的「檔案管理」就能找到。\n之後如果在 DeskNotes 刪除這個檔案，同步時電腦上的也會移到垃圾筒；複製到手機的這份不受影響。`,
+      okText: '好',
+    });
+  } catch (err) {
+    syncOverlay.hide();
+    openModal({ title: '無法複製到手機', text: err.message || String(err), okText: '好' });
+  }
 }
 async function shareFile(f) {
   try {
@@ -721,7 +737,7 @@ function fileContextMenu(e, id) {
     : [
       { label: '開啟', action: () => openFile(f) },
       ...(api.files.inApp
-        ? [{ label: '分享…', action: () => shareFile(f) }]
+        ? [{ label: '複製到手機', action: () => copyFileToPhone(f) }, { label: '分享…', action: () => shareFile(f) }]
         : [{ label: '在檔案總管中顯示', action: () => api.files.show(db.folders, f) }]),
       { label: '重新命名', action: () => renameFile(id) },
       { label: '移動到…', action: async () => { if (await moveFiles([id])) render(); } },
