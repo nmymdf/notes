@@ -1543,12 +1543,6 @@ $('#img-bar').addEventListener('mousedown', (e) => e.preventDefault());
 $('#img-bar').addEventListener('click', (e) => {
   const b = e.target.closest('button');
   if (!b || !selectedImg) return;
-  if (b.dataset.act === 'zoom') {
-    const img = selectedImg;
-    hideImageBar();
-    openLightbox(img);
-    return;
-  }
   if (b.dataset.act === 'draw') {
     drawOnImage(selectedImg);
     return;
@@ -1567,6 +1561,7 @@ scroller.addEventListener('scroll', hideImageBar);
 
 editor.addEventListener('click', (e) => {
   if (e.target.tagName === 'IMG') {
+    if (IS_MOBILE) { editor.blur(); openLightbox(e.target); return; }
     showImageBar(e.target);
     return;
   }
@@ -1658,6 +1653,9 @@ function makeZoomable(box) {
   box.addEventListener('pointermove', (e) => {
     if (!pts.has(e.pointerId) || !gesture) return;
     pts.set(e.pointerId, rel(e));
+    update();
+  });
+  function update() {
     if (gesture.pinch && pts.size >= 2) {
       const [mx, my, d] = mid();
       const [m0x, m0y, d0] = gesture.m;
@@ -1667,7 +1665,7 @@ function makeZoomable(box) {
       clamp();
       moved = true;
     } else if (!gesture.pinch) {
-      const [px, py] = pts.get(e.pointerId);
+      const [px, py] = [...pts.values()][0];
       const dx = px - gesture.p[0];
       const dy = py - gesture.p[1];
       if (Math.hypot(dx, dy) > 8) moved = true;
@@ -1676,7 +1674,7 @@ function makeZoomable(box) {
       clamp();
     }
     apply();
-  });
+  }
   const up = (e) => {
     if (!pts.has(e.pointerId)) return;
     const p = pts.get(e.pointerId);
@@ -1696,12 +1694,22 @@ function makeZoomable(box) {
   box.addEventListener('pointercancel', up);
   window.addEventListener('resize', fit);
 
+  // A pinch that started on the picture in the note continues here.
+  const touchPts = (touches) => {
+    const r = box.getBoundingClientRect();
+    pts.clear();
+    [...touches].slice(0, 2).forEach((t, i) => pts.set(`t${i}`, [t.clientX - r.left - r.width / 2, t.clientY - r.top - r.height / 2]));
+  };
   return {
+    pinchFrom(touches) { touchPts(touches); startGesture(); },
+    pinchTo(touches) { if (!gesture) return; touchPts(touches); if (pts.size >= 2) update(); },
+    pinchEnd() { pts.clear(); gesture = null; },
     show(el) {
       img = el;
       pts.clear();
       gesture = null;
       fitW = 0;
+      s = 1; x = 0; y = 0;
       box.classList.toggle('zoom-box', !!img);
       if (!img) return;
       img.draggable = false;
@@ -1711,16 +1719,50 @@ function makeZoomable(box) {
   };
 }
 const lightboxZoom = IS_MOBILE ? makeZoomable($('#lightbox')) : null;
+let lightboxSource = null; // the picture in the note, for 刪除
 function openLightbox(src) {
   const img = $('#lightbox img');
   img.removeAttribute('style');
   img.src = src.src || src;
+  lightboxSource = src.tagName === 'IMG' && editor.contains(src) ? src : null;
+  $('#lb-delete').classList.toggle('hidden', !lightboxSource);
   $('#lightbox').classList.remove('hidden');
   if (lightboxZoom) lightboxZoom.show(img);
 }
 const closeLightbox = () => $('#lightbox').classList.add('hidden');
 $('#lightbox').addEventListener('click', () => { if (!IS_MOBILE) closeLightbox(); });
 $('#lb-close').addEventListener('click', closeLightbox);
+$('#lb-delete').addEventListener('click', async () => {
+  const img = lightboxSource;
+  closeLightbox();
+  if (!img || !(await openModal({ title: '刪除這張圖片？', okText: '刪除', danger: true }))) return;
+  img.remove();
+  onEdited();
+});
+
+// On the phone a picture in the note opens the viewer: tap it, or put two
+// fingers on it and spread them (the pinch carries on in the viewer).
+if (IS_MOBILE) {
+  let handing = false;
+  editor.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 2) return;
+    const img = [...e.touches].map((t) => t.target).find((t) => t.tagName === 'IMG');
+    if (!img) return;
+    e.preventDefault();
+    handing = true;
+    editor.blur();
+    openLightbox(img);
+    lightboxZoom.pinchFrom(e.touches);
+  }, { passive: false });
+  editor.addEventListener('touchmove', (e) => {
+    if (!handing) return;
+    e.preventDefault();
+    lightboxZoom.pinchTo(e.touches);
+  }, { passive: false });
+  const endHandoff = (e) => { if (handing && e.touches.length < 2) { handing = false; lightboxZoom.pinchEnd(); } };
+  editor.addEventListener('touchend', endHandoff);
+  editor.addEventListener('touchcancel', endHandoff);
+}
 
 // ----- drawing (desktop only; the editor itself is in drawing.js)
 // A drawing is stored as a normal PNG image in the note, plus data-drawing
