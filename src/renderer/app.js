@@ -1551,8 +1551,6 @@ $('#img-bar').addEventListener('click', (e) => {
     restoreOriginalImage(selectedImg);
   } else if (b.dataset.act === 'delete') {
     selectedImg.remove();
-  } else {
-    selectedImg.style.width = b.dataset.w ? b.dataset.w + '%' : '';
   }
   hideImageBar();
   onEdited();
