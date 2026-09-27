@@ -185,7 +185,7 @@
         <button data-cmd="indent" title="增加縮排">⇥</button>
         <i></i>
         <button id="btn-insert-image" title="插入圖片"><svg><use href="#i-image"/></svg></button>
-        <button id="btn-draw" class="desktop-only" title="畫圖"><svg><use href="#i-draw"/></svg></button>
+        <button id="btn-draw" title="畫圖"><svg><use href="#i-draw"/></svg></button>
         <button id="btn-insert-hr" title="分隔線">―</button>
         <i></i>
         <button id="btn-voice" class="voice" title="語音輸入 (Ctrl+Shift+M 或 Win+H)"><svg><use href="#i-mic"/></svg><span>語音輸入</span></button>
@@ -245,7 +245,7 @@
   <div id="sync-dialog" class="modal hidden"><div class="modal-box wide" id="sync-box"></div></div>
   <div id="sync-overlay" class="sync-overlay hidden"><div class="box"><div class="spinner"></div><div id="sync-overlay-text"></div></div></div>
   <div id="context-menu" class="context-menu hidden"></div>
-  <div id="lightbox" class="lightbox hidden"><img alt=""><button id="lb-delete" class="lb-btn lb-delete mobile-only hidden" title="刪除圖片">🗑</button><button id="lb-close" class="lb-btn lb-close" title="關閉 (Esc)">✕</button><div class="lb-zoom"><button class="lb-btn" data-zoom="out" title="縮小">－</button><button class="lb-btn" data-zoom="in" title="放大">＋</button></div></div>
+  <div id="lightbox" class="lightbox hidden"><img alt=""><div class="lb-tools mobile-only"><button id="lb-draw" class="hidden">✏️ 畫圖</button><button id="lb-restore" class="hidden">還原原圖</button></div><button id="lb-delete" class="lb-btn lb-delete mobile-only hidden" title="刪除圖片">🗑</button><button id="lb-close" class="lb-btn lb-close" title="關閉 (Esc)">✕</button><div class="lb-zoom"><button class="lb-btn" data-zoom="out" title="縮小">－</button><button class="lb-btn" data-zoom="in" title="放大">＋</button></div></div>
   <div id="toast" class="toast hidden"></div>
 
   <script src="sync-merge.js"></script>

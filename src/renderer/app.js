@@ -1776,6 +1776,8 @@ function openLightbox(src) {
   img.src = src.src || src;
   lightboxSource = src.tagName === 'IMG' && editor.contains(src) ? src : null;
   $('#lb-delete').classList.toggle('hidden', !lightboxSource);
+  $('#lb-draw').classList.toggle('hidden', !lightboxSource);
+  $('#lb-restore').classList.toggle('hidden', !readDrawing(lightboxSource || img)?.base || !lightboxSource);
   $('#lightbox').classList.remove('hidden');
   lightboxZoom.show(img);
 }
@@ -1793,6 +1795,8 @@ editor.addEventListener('wheel', (e) => {
   if (e.deltaY < 0) lightboxZoom.zoomBy(1.5, e.clientX, e.clientY);
 }, { passive: false });
 $('#lb-close').addEventListener('click', closeLightbox);
+$('#lb-draw').addEventListener('click', () => { const img = lightboxSource; closeLightbox(); if (img) drawOnImage(img); });
+$('#lb-restore').addEventListener('click', () => { const img = lightboxSource; closeLightbox(); if (img) restoreOriginalImage(img); });
 $('#lb-delete').addEventListener('click', async () => {
   const img = lightboxSource;
   closeLightbox();
@@ -1868,7 +1872,9 @@ async function newDrawing() {
   if (!noteId) return;
   const s = getSelection();
   const saved = s.rangeCount && editor.contains(s.anchorNode) ? s.getRangeAt(0).cloneRange() : null;
-  const res = await DrawingEditor.open({ drawing: { v: 1, w: 1600, h: 1000, bg: 'white', items: [] }, title: '畫圖', askText: askDrawText });
+  if (IS_MOBILE) editor.blur(); // close the keyboard
+  const size = IS_MOBILE ? { w: 1000, h: 1400 } : { w: 1600, h: 1000 }; // phone: portrait page
+  const res = await DrawingEditor.open({ drawing: { v: 1, ...size, bg: 'white', items: [] }, title: '畫圖', askText: askDrawText });
   if (!res || state.currentId !== noteId) return;
   if (res.error) { toast(res.error); return; }
   try {
@@ -1876,6 +1882,7 @@ async function newDrawing() {
     editor.focus();
     if (saved) { s.removeAllRanges(); s.addRange(saved); } else placeCaretAtEnd(editor);
     document.execCommand('insertHTML', false, `<img src="${url}" data-drawing="${escapeHtml(JSON.stringify(res.drawing))}"><br>`);
+    hydrateImages(editor);
     onEdited();
   } catch (err) {
     toast(`無法儲存畫圖：${err.message || err}`);
@@ -1916,6 +1923,7 @@ async function drawOnImage(img) {
       return;
     }
   }
+  hydrateImages(editor);
   onEdited();
 }
 
@@ -1925,6 +1933,7 @@ async function restoreOriginalImage(img) {
   if (!(await openModal({ title: '還原原圖？', text: '畫在圖片上的內容會被移除。', okText: '還原' }))) return;
   if (!editor.contains(img)) return;
   setNoteImage(img, d.base, null);
+  hydrateImages(editor);
   onEdited();
 }
 
@@ -3223,6 +3232,8 @@ $('#drawer-backdrop').addEventListener('click', closeDrawer);
 function handleBack() {
   const shown = (sel) => !$(sel).classList.contains('hidden');
   if (shown('#sync-overlay')) return true;
+  if (shown('#modal')) { $('#modal-cancel').click(); return true; }
+  if ($('.draw-view')) { $('.draw-view .text-btn:not(.primary)').click(); return true; } // 取消
   if (shown('#file-preview')) { closeFilePreview(); return true; }
   if (shown('#sync-dialog')) { syncDialog.close(); return true; }
   if (shown('#import-dialog')) { $('#import-cancel').click(); return true; }

@@ -494,6 +494,19 @@ const api = {
     });
   },
 
+  // Image bytes for the drawing editor (same as the computer's image:read).
+  async readImage(url) {
+    const m = /^note-img:\/\/(img|vault)\/([\w.-]+)$/.exec(url || '');
+    if (!m) return null;
+    try {
+      if (m[1] === 'img') return await readBytes(`${IMG_DIR}/${m[2]}`);
+      if (!vault.key) return null;
+      return await unpackImage(vault.key, await readBytes(`${VAULT_IMG_DIR}/${m[2]}`));
+    } catch {
+      return null;
+    }
+  },
+
   // Turn a stored note-img:// URL into something the WebView can display.
   async resolveImage(url) {
     const m = /^note-img:\/\/(img|vault)\/([\w.-]+)$/.exec(url);

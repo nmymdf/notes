@@ -404,7 +404,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .lightbox .lb-btn { cursor: pointer; }
 html:not(.mobile) .lightbox img { cursor: grab; }
 /* drawing editor (drawing.js); below .modal so the text tool's dialog shows on top */
-.draw-view { position: fixed; inset: 0; z-index: 98; background: #0c0c0c; display: flex; flex-direction: column; }
+.draw-view { position: fixed; inset: 0; z-index: 98; background: #0c0c0c; display: flex; flex-direction: column; touch-action: manipulation; }
 .draw-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
 .draw-group { display: flex; align-items: center; gap: 2px; padding-right: 10px; border-right: 1px solid var(--line); }
 .draw-group button { background: none; border: 0; border-radius: 8px; cursor: pointer; }
@@ -434,6 +434,15 @@ html:not(.mobile) .mobile-only { display: none !important; }
 .lb-zoom { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(env(safe-area-inset-bottom) + 20px); z-index: 1; display: flex; gap: 16px; }
 .lb-zoom .lb-btn { position: static; width: 56px; height: 56px; font-size: 28px; font-weight: 700; }
 .lb-delete { right: 64px; }
+.lb-tools { position: absolute; top: calc(env(safe-area-inset-top) + 12px); left: 12px; z-index: 1; display: flex; gap: 8px; }
+.lb-tools button { border: 0; border-radius: 20px; padding: 10px 14px; background: #000a; color: #fff; font-size: 15px; }
+/* drawing on the phone: compact toolbar */
+.mobile .draw-bar { gap: 6px; padding: 6px 8px; padding-top: calc(env(safe-area-inset-top) + 6px); }
+.mobile .draw-group { padding-right: 6px; }
+.mobile .draw-tool, .mobile .draw-size { min-width: 36px; height: 36px; padding: 0 6px; }
+.mobile .draw-group .draw-color { width: 26px; height: 26px; margin: 0 2px; }
+.mobile .draw-spacer { display: none; }
+.mobile .draw-view .text-btn { padding: 8px 14px; }
 .lightbox img { max-width: 94vw; max-height: 94vh; border-radius: 6px; }
 
 .toast {
