@@ -689,7 +689,11 @@ async function openFile(f) {
   const body = $('#fp-body');
   body.innerHTML = '';
   $('#fp-name').textContent = f.name;
-  if (kind === 'image') body.innerHTML = `<img src="${escapeHtml(url)}" alt="">`;
+  fileZoom.show(null);
+  if (kind === 'image') {
+    body.innerHTML = `<img src="${escapeHtml(url)}" alt="">`;
+    fileZoom.show(body.querySelector('img'));
+  }
   else if (kind === 'audio') body.innerHTML = `<audio controls autoplay src="${escapeHtml(url)}"></audio>`;
   else if (kind === 'video') body.innerHTML = `<video controls autoplay playsinline src="${escapeHtml(url)}"></video>`;
   else if (kind === 'text') {
@@ -723,6 +727,7 @@ async function shareFile(f) {
     openModal({ title: '無法分享', text: err.message || String(err), okText: '好' });
   }
 }
+const fileZoom = IS_MOBILE ? makeZoomable($('#fp-body')) : { show() {} };
 function closeFilePreview() {
   $('#fp-body').innerHTML = ''; // stops audio/video
   $('#file-preview').classList.add('hidden');
@@ -1538,6 +1543,12 @@ $('#img-bar').addEventListener('mousedown', (e) => e.preventDefault());
 $('#img-bar').addEventListener('click', (e) => {
   const b = e.target.closest('button');
   if (!b || !selectedImg) return;
+  if (b.dataset.act === 'zoom') {
+    const img = selectedImg;
+    hideImageBar();
+    openLightbox(img);
+    return;
+  }
   if (b.dataset.act === 'draw') {
     drawOnImage(selectedImg);
     return;
@@ -1583,10 +1594,133 @@ editor.addEventListener('dblclick', (e) => {
   if (e.target.tagName !== 'IMG') return;
   hideImageBar();
   if (!IS_MOBILE && e.target.dataset.drawing) { drawOnImage(e.target); return; }
-  $('#lightbox img').src = e.target.src;
-  $('#lightbox').classList.remove('hidden');
+  openLightbox(e.target);
 });
-$('#lightbox').addEventListener('click', () => $('#lightbox').classList.add('hidden'));
+
+// ----- picture viewer. On the phone pictures can be zoomed like in a photo
+// app: pinch to zoom, drag to move, double-tap to switch between fit and zoomed.
+// The picture is resized (not CSS-scaled), so it stays sharp at any zoom.
+function makeZoomable(box) {
+  let img = null;
+  let fitW = 0; let fitH = 0;
+  let s = 1; let x = 0; let y = 0; // zoom and offset from the centered position
+  const pts = new Map();
+  let gesture = null;
+  let moved = false;
+  let lastTap = { t: 0, x: 0, y: 0 };
+
+  const maxZoom = () => Math.max(4, ((img.naturalWidth || fitW) / fitW) * 2);
+  function clamp() {
+    s = Math.min(Math.max(s, 1), maxZoom());
+    const mx = Math.max(0, (fitW * s - box.clientWidth) / 2);
+    const my = Math.max(0, (fitH * s - box.clientHeight) / 2);
+    x = Math.min(mx, Math.max(-mx, x));
+    y = Math.min(my, Math.max(-my, y));
+  }
+  function apply() {
+    if (!img || !fitW) return;
+    const w = fitW * s;
+    const h = fitH * s;
+    img.style.width = `${w}px`;
+    img.style.height = `${h}px`;
+    img.style.transform = `translate(${(box.clientWidth - w) / 2 + x}px, ${(box.clientHeight - h) / 2 + y}px)`;
+  }
+  function fit() {
+    if (!img || !img.naturalWidth) return;
+    const k = Math.min(box.clientWidth / img.naturalWidth, box.clientHeight / img.naturalHeight);
+    fitW = img.naturalWidth * k;
+    fitH = img.naturalHeight * k;
+    s = 1; x = 0; y = 0;
+    apply();
+  }
+  // Zoom to `ns` keeping the point (px, py) (relative to the box center) in place.
+  function zoomAt(ns, px, py, from = { s, x, y }) {
+    s = ns;
+    x = px - (px - from.x) * (s / from.s);
+    y = py - (py - from.y) * (s / from.s);
+    clamp();
+  }
+  const rel = (e) => { const r = box.getBoundingClientRect(); return [e.clientX - r.left - r.width / 2, e.clientY - r.top - r.height / 2]; };
+  const mid = () => { const [a, b] = [...pts.values()]; return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, Math.hypot(a[0] - b[0], a[1] - b[1]) || 1]; };
+  function startGesture() {
+    if (pts.size >= 2) gesture = { pinch: true, m: mid(), s, x, y };
+    else if (pts.size === 1) gesture = { p: [...pts.values()][0], x, y };
+    else gesture = null;
+  }
+
+  box.addEventListener('pointerdown', (e) => {
+    if (!img || e.target.closest('button')) return;
+    box.setPointerCapture(e.pointerId);
+    pts.set(e.pointerId, rel(e));
+    if (pts.size === 1) moved = false;
+    startGesture();
+  });
+  box.addEventListener('pointermove', (e) => {
+    if (!pts.has(e.pointerId) || !gesture) return;
+    pts.set(e.pointerId, rel(e));
+    if (gesture.pinch && pts.size >= 2) {
+      const [mx, my, d] = mid();
+      const [m0x, m0y, d0] = gesture.m;
+      zoomAt(gesture.s * (d / d0), m0x, m0y, gesture);
+      x += mx - m0x; // moving both fingers also moves the picture
+      y += my - m0y;
+      clamp();
+      moved = true;
+    } else if (!gesture.pinch) {
+      const [px, py] = pts.get(e.pointerId);
+      const dx = px - gesture.p[0];
+      const dy = py - gesture.p[1];
+      if (Math.hypot(dx, dy) > 8) moved = true;
+      x = gesture.x + dx;
+      y = gesture.y + dy;
+      clamp();
+    }
+    apply();
+  });
+  const up = (e) => {
+    if (!pts.has(e.pointerId)) return;
+    const p = pts.get(e.pointerId);
+    pts.delete(e.pointerId);
+    startGesture();
+    if (pts.size || moved || e.type === 'pointercancel') return;
+    const now = Date.now();
+    if (now - lastTap.t < 320 && Math.hypot(p[0] - lastTap.x, p[1] - lastTap.y) < 40) {
+      if (s > 1.05) { s = 1; x = 0; y = 0; } else zoomAt(Math.min(3, maxZoom()), p[0], p[1]);
+      apply();
+      lastTap = { t: 0, x: 0, y: 0 };
+    } else {
+      lastTap = { t: now, x: p[0], y: p[1] };
+    }
+  };
+  box.addEventListener('pointerup', up);
+  box.addEventListener('pointercancel', up);
+  window.addEventListener('resize', fit);
+
+  return {
+    show(el) {
+      img = el;
+      pts.clear();
+      gesture = null;
+      fitW = 0;
+      box.classList.toggle('zoom-box', !!img);
+      if (!img) return;
+      img.draggable = false;
+      if (img.complete && img.naturalWidth) requestAnimationFrame(fit);
+      img.onload = fit;
+    },
+  };
+}
+const lightboxZoom = IS_MOBILE ? makeZoomable($('#lightbox')) : null;
+function openLightbox(src) {
+  const img = $('#lightbox img');
+  img.removeAttribute('style');
+  img.src = src.src || src;
+  $('#lightbox').classList.remove('hidden');
+  if (lightboxZoom) lightboxZoom.show(img);
+}
+const closeLightbox = () => $('#lightbox').classList.add('hidden');
+$('#lightbox').addEventListener('click', () => { if (!IS_MOBILE) closeLightbox(); });
+$('#lb-close').addEventListener('click', closeLightbox);
 
 // ----- drawing (desktop only; the editor itself is in drawing.js)
 // A drawing is stored as a normal PNG image in the note, plus data-drawing
@@ -2991,7 +3125,7 @@ function handleBack() {
   if (shown('#import-dialog')) { $('#import-cancel').click(); return true; }
   if (shown('#modal')) { $('#modal-cancel').click(); return true; }
   if (document.documentElement.classList.contains('drawer-open')) { closeDrawer(); return true; }
-  if (shown('#lightbox')) { $('#lightbox').classList.add('hidden'); return true; }
+  if (shown('#lightbox')) { closeLightbox(); return true; }
   if (shown('#context-menu')) { hideContextMenu(); return true; }
   if (shown('#color-palette')) { closePalette(); return true; }
   if (selectedImg) { hideImageBar(); return true; }

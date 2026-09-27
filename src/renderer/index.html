@@ -207,6 +207,7 @@
         <button data-w="75">75%</button>
         <button data-w="100">100%</button>
         <button data-w="">原始</button>
+        <button data-act="zoom" class="mobile-only">🔍 放大</button>
         <button data-act="draw" class="desktop-only">✏️ 畫圖</button>
         <button data-act="restore" class="desktop-only hidden">還原原圖</button>
         <button data-act="delete" class="danger">刪除</button>
@@ -250,7 +251,7 @@
   <div id="sync-dialog" class="modal hidden"><div class="modal-box wide" id="sync-box"></div></div>
   <div id="sync-overlay" class="sync-overlay hidden"><div class="box"><div class="spinner"></div><div id="sync-overlay-text"></div></div></div>
   <div id="context-menu" class="context-menu hidden"></div>
-  <div id="lightbox" class="lightbox hidden"><img alt=""></div>
+  <div id="lightbox" class="lightbox hidden"><img alt=""><button id="lb-close" class="lb-close mobile-only" title="關閉">✕</button></div>
   <div id="toast" class="toast hidden"></div>
 
   <script src="sync-merge.js"></script>
