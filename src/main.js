@@ -9,6 +9,7 @@ const { pathToFileURL } = require('url');
 const { execFile } = require('child_process');
 const { Vault } = require('./vault');
 const { readOutlookCsv } = require('./outlook-import');
+const { SyncServer } = require('./sync-server');
 
 const IMG_SCHEME = 'note-img';
 const QUICK_NOTE_SHORTCUT = 'CommandOrControl+Alt+N';
@@ -21,6 +22,7 @@ let dataDir;
 let imagesDir;
 let dbFile;
 let vault;
+let syncServer;
 let mainWindow = null;
 let tray = null;
 let quitting = false;
@@ -266,10 +268,37 @@ Add-Type -Namespace W -Name K -MemberDefinition '[DllImport("user32.dll")] publi
     });
   });
 
+  // ----- phone sync (see sync-server.js)
+  ipcMain.handle('sync:status', () => syncServer.status());
+  ipcMain.handle('sync:set-enabled', (_e, on) => { syncServer.setEnabled(on); return syncServer.status(); });
+  ipcMain.handle('sync:start-pairing', () => syncServer.startPairing());
+  ipcMain.handle('sync:cancel-pairing', () => { syncServer.cancelPairing(); return syncServer.status(); });
+  ipcMain.handle('sync:remove-device', (_e, id) => { syncServer.removeDevice(id); return syncServer.status(); });
+  ipcMain.on('sync:answer', (_e, { id, result, error }) => {
+    const p = rendererAsks.get(id);
+    if (!p) return;
+    rendererAsks.delete(id);
+    if (error) p.reject(new Error(error)); else p.resolve(result);
+  });
+
   ipcMain.handle('window:toggle-on-top', () => {
     const next = !mainWindow.isAlwaysOnTop();
     mainWindow.setAlwaysOnTop(next);
     return next;
+  });
+}
+
+// Ask the renderer (which owns the in-memory notes) to do part of a sync.
+const rendererAsks = new Map();
+let askSeq = 0;
+function askRenderer(op, payload) {
+  return new Promise((resolve, reject) => {
+    const id = ++askSeq;
+    rendererAsks.set(id, { resolve, reject });
+    mainWindow.webContents.send('sync:ask', { id, op, payload });
+    setTimeout(() => {
+      if (rendererAsks.delete(id)) reject(new Error('電腦端沒有回應'));
+    }, 60000);
   });
 }
 
@@ -287,6 +316,14 @@ if (!app.requestSingleInstanceLock()) {
     fs.mkdirSync(imagesDir, { recursive: true });
 
     vault = new Vault(dataDir);
+    syncServer = new SyncServer({
+      dataDir,
+      imagesDir,
+      vaultImagesDir: vault.imagesDir,
+      vaultFile: vault.file,
+      askRenderer,
+      onEvent: (evt) => mainWindow && mainWindow.webContents.send('sync:event', evt),
+    });
 
     protocol.handle(IMG_SCHEME, (req) => {
       const url = new URL(req.url);
@@ -303,6 +340,7 @@ if (!app.requestSingleInstanceLock()) {
     createWindow();
     createTray();
     globalShortcut.register(QUICK_NOTE_SHORTCUT, quickNote);
+    if (syncServer.config.enabled) syncServer.start();
 
     if (!process.argv.includes('--hidden')) mainWindow.show();
   });

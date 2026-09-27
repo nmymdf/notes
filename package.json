@@ -1,7 +1,7 @@
 {
   "name": "desk-notes",
   "productName": "DeskNotes",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "description": "Windows 桌面筆記：隨時記事、貼圖、資料夾、搜尋、垃圾筒",
   "main": "src/main.js",
   "author": "nmymdf",
@@ -11,7 +11,8 @@
     "dist": "electron-builder --win",
     "dist:portable": "electron-builder --win portable",
     "build:mobile": "node scripts/build-mobile.js",
-    "android": "node scripts/build-mobile.js && npx cap sync android"
+    "android": "node scripts/build-mobile.js && npx cap sync android",
+    "test": "node test/sync-merge.test.js"
   },
   "devDependencies": {
     "@capacitor/android": "^8.5.2",

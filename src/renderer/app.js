@@ -11,8 +11,8 @@ const PREFS_KEY = 'desknotes.prefs';
 
 let db = { version: 1, folders: [], notes: [] };
 // Locked notes: decrypted copies live here only while the vault is unlocked.
-const vault = { exists: false, unlocked: false, notes: [], folders: [] };
-const vaultPayload = () => ({ notes: vault.notes, folders: vault.folders });
+const vault = { exists: false, unlocked: false, notes: [], folders: [], tombstones: {} };
+const vaultPayload = () => ({ notes: vault.notes, folders: vault.folders, tombstones: vault.tombstones });
 const state = {
   view: 'all',              // 'all' | 'starred' | 'trash' | folder id
   search: '',
@@ -112,11 +112,49 @@ function savePrefs() {
 
 // ---------------------------------------------------------------- persistence
 
+// ----- change tracking for sync
+// Before every save, compare notes/folders with how they looked at the last
+// save: changed ones get `rev` = now, removed ones leave a tombstone. This way
+// every kind of edit is tracked without touching each operation.
+const snapshots = { db: new Map(), vault: new Map() };
+const scopeData = (scope) => (scope === 'vault' ? vault : db);
+
+function snapshotItems(scope, bump) {
+  const data = scopeData(scope);
+  const snap = snapshots[scope];
+  const now = Date.now();
+  const seen = new Set();
+  data.tombstones ||= {};
+  for (const [prefix, list] of [['n', data.notes], ['f', data.folders]]) {
+    for (const it of list) {
+      const key = `${prefix}:${it.id}`;
+      const { rev, ...rest } = it;
+      const json = JSON.stringify(rest);
+      if (!bump) it.rev ||= it.updatedAt || it.createdAt || now;
+      else if (!snap.has(key) || snap.get(key) !== json) it.rev = now; // new here, or changed
+      snap.set(key, json);
+      seen.add(key);
+    }
+  }
+  for (const key of [...snap.keys()]) {
+    if (seen.has(key)) continue;
+    snap.delete(key);
+    if (bump) data.tombstones[key.slice(2)] = now;
+  }
+}
+// Record the current state without marking anything as changed (after loading/syncing).
+const resetSnapshot = (scope) => { snapshots[scope].clear(); snapshotItems(scope, false); };
+function stamp() {
+  snapshotItems('db', true);
+  if (vault.unlocked) snapshotItems('vault', true);
+}
+
 let saveTimer = null;
 function persist(immediate = false) {
   clearTimeout(saveTimer);
   const run = async () => {
     try {
+      stamp();
       await api.save(db);
       if (vault.unlocked) await api.vault.save(vaultPayload());
       if (state.currentId) $('#save-state').textContent = '已儲存';
@@ -618,9 +656,13 @@ async function lockVault() {
   if (currentInVault()) closeEditor();
   if (inVaultView()) state.view = 'vault';
   clearTimeout(saveTimer);
+  stamp();
+  await api.save(db);
   await api.vault.save(vaultPayload());
   vault.notes = [];
   vault.folders = [];
+  vault.tombstones = {};
+  snapshots.vault.clear();
   vault.unlocked = false;
   await api.vault.lock();
   if (inVaultView()) { state.selecting = false; state.selected.clear(); }
@@ -641,7 +683,9 @@ async function ensureVaultUnlocked() {
   if (!payload) { toast('密碼錯誤'); return false; }
   vault.notes = payload.notes;
   vault.folders = payload.folders;
+  vault.tombstones = payload.tombstones || {};
   repairFolders('vault');
+  resetSnapshot('vault');
   vault.unlocked = true;
   return true;
 }
@@ -657,6 +701,7 @@ async function moveToVault(ids, folderFor = () => null, { silent = false } = {})
   }
   db.notes = db.notes.filter((n) => !ids.includes(n.id));
   clearTimeout(saveTimer);
+  stamp();
   await api.vault.save(vaultPayload());
   // Overwrite notes.json and its backup so no plaintext copy remains, then
   // remove the now-unused plain image files.
@@ -700,6 +745,7 @@ async function moveFolderToVault(id) {
   normalizeOrders('db', f.parentId || null);
   if (ids.includes(state.view)) state.view = map[state.view];
   await persist(true);
+  stamp();
   await api.save(db, { scrub: true });
   render();
   toast(`已把「${f.name}」移到上鎖筆記`);
@@ -781,6 +827,8 @@ $('#vault-gate').addEventListener('submit', async (e) => {
       const payload = await api.vault.create(pw);
       vault.notes = payload.notes;
       vault.folders = payload.folders;
+      vault.tombstones = {};
+      resetSnapshot('vault');
       vault.exists = true;
     } else {
       btn.textContent = '解鎖中…';
@@ -792,7 +840,9 @@ $('#vault-gate').addEventListener('submit', async (e) => {
       }
       vault.notes = payload.notes;
       vault.folders = payload.folders;
+      vault.tombstones = payload.tombstones || {};
       repairFolders('vault');
+      resetSnapshot('vault');
     }
     vault.unlocked = true;
     $('#vault-pw').value = '';
@@ -1905,7 +1955,7 @@ document.addEventListener('click', (e) => {
 });
 
 document.addEventListener('keydown', (e) => {
-  if (!$('#modal').classList.contains('hidden') || !$('#import-dialog').classList.contains('hidden')) return;
+  if (['#modal', '#import-dialog', '#sync-dialog', '#sync-overlay'].some((sel) => !$(sel).classList.contains('hidden'))) return;
   const inEditor = !!state.currentId;
   if (e.key === 'Escape') {
     if (!$('#color-palette').classList.contains('hidden')) { closePalette(); return; }
@@ -1953,6 +2003,329 @@ document.addEventListener('paste', async (e) => {
 api.onFlush(async () => { flushEditor(); await persist(true); });
 api.onNewNote(() => { if (state.currentId) closeEditor(); createNote(); });
 
+// ---------------------------------------------------------------- phone ⇄ computer sync
+//
+// The computer runs a sync server (src/sync-server.js, api.sync.role 'server');
+// the phone (src/mobile/platform.js, role 'client') connects when the user taps
+// 「與電腦同步」, merges both sides with SyncMerge and sends the result back.
+
+const syncApi = api.sync;
+const syncOverlay = {
+  timer: null,
+  show(text) {
+    $('#sync-overlay-text').textContent = text;
+    $('#sync-overlay').classList.remove('hidden');
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => this.hide(), 120000); // never lock the screen for good
+  },
+  hide() { clearTimeout(this.timer); $('#sync-overlay').classList.add('hidden'); },
+};
+
+function formatWhen(ts) {
+  if (!ts) return '尚未同步';
+  return `${formatDate(ts)} ${new Date(ts).toDateString() === new Date().toDateString() ? '' : new Date(ts).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })}`.trim();
+}
+
+function adoptMerged(data) {
+  db.notes = data.notes;
+  db.folders = data.folders;
+  db.tombstones = data.tombstones;
+  repairFolders('db');
+  resetSnapshot('db');
+}
+
+// A small dialog whose content is re-rendered by the caller.
+const syncDialog = {
+  open(html) {
+    $('#sync-box').innerHTML = html;
+    $('#sync-dialog').classList.remove('hidden');
+  },
+  close() {
+    $('#sync-dialog').classList.add('hidden');
+    if (this.onClose) { const cb = this.onClose; this.onClose = null; cb(); }
+  },
+  get isOpen() { return !$('#sync-dialog').classList.contains('hidden'); },
+};
+$('#sync-dialog').addEventListener('click', (e) => { if (e.target.id === 'sync-dialog') syncDialog.close(); });
+$('#sync-dialog').addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.stopPropagation(); syncDialog.close(); } });
+
+// ----- computer side
+
+let pairTimer = null;
+async function renderServerDialog() {
+  const st = await syncApi.status();
+  const devices = st.devices.length
+    ? st.devices.map((d) => `<div class="row"><div class="grow"><b>${escapeHtml(d.name)}</b><small>上次同步：${escapeHtml(formatWhen(d.lastSync))}</small></div>
+        <button class="text-btn danger" data-remove="${escapeHtml(d.id)}">移除</button></div>`).join('')
+    : '<div class="row"><div class="grow"><small>還沒有配對的手機</small></div></div>';
+  const addr = st.addresses[0] || '（找不到網路，請確認電腦有連上 Wi-Fi 或網路線）';
+  let pairing = '';
+  if (st.pairing) {
+    const left = Math.max(0, Math.round((st.pairing.expires - Date.now()) / 1000));
+    pairing = `<div class="pair-box">
+        <div>在手機的 DeskNotes 按「與電腦同步」，輸入：</div>
+        <small>電腦位址</small><div class="addr">${escapeHtml(addr)}</div>
+        ${st.addresses.length > 1 ? `<small>（也可能是：${escapeHtml(st.addresses.slice(1).join('、'))}）</small>` : ''}
+        <small>配對碼</small><div class="big">${st.pairing.code.slice(0, 3)} ${st.pairing.code.slice(3)}</div>
+        <small>${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} 後失效</small>
+        <div><button class="text-btn" id="sync-cancel-pair">取消配對</button></div>
+      </div>`;
+  }
+  $('#sync-box').innerHTML = `
+    <h3>手機同步</h3>
+    <p>手機和電腦連在同一個 Wi-Fi 時，在手機的 DeskNotes 按「與電腦同步」，兩邊的筆記就會合併成一樣的內容。</p>
+    <label class="check-row"><input type="checkbox" id="sync-enabled" ${st.enabled ? 'checked' : ''}>允許手機同步（電腦會在家裡網路上等待手機連線）</label>
+    ${st.error ? `<div class="err">${escapeHtml(st.error)}</div>` : ''}
+    ${st.enabled && st.running ? `<small style="color:var(--muted)">電腦位址：${escapeHtml(addr)}</small>` : ''}
+    <h4>已配對的手機</h4>
+    ${devices}
+    ${pairing || '<div class="modal-actions" style="justify-content:flex-start"><button class="text-btn primary" id="sync-start-pair">＋ 配對新手機</button></div>'}
+    <div class="modal-actions"><button class="text-btn" id="sync-close">關閉</button></div>`;
+  $('#sync-enabled').onchange = async (e) => { await syncApi.setEnabled(e.target.checked); renderServerDialog(); };
+  $('#sync-close').onclick = () => syncDialog.close();
+  if ($('#sync-start-pair')) $('#sync-start-pair').onclick = async () => { await syncApi.startPairing(); renderServerDialog(); };
+  if ($('#sync-cancel-pair')) $('#sync-cancel-pair').onclick = async () => { await syncApi.cancelPairing(); renderServerDialog(); };
+  $$('#sync-box [data-remove]').forEach((b) => {
+    b.onclick = async () => {
+      if (await openModal({ title: '移除這支手機？', text: '移除後，這支手機要重新配對才能同步。', okText: '移除', danger: true })) {
+        await syncApi.removeDevice(b.dataset.remove);
+        renderServerDialog();
+      }
+    };
+  });
+  clearTimeout(pairTimer);
+  if (st.pairing && syncDialog.isOpen) pairTimer = setTimeout(renderServerDialog, 1000);
+}
+
+function initServerSync() {
+  $('#btn-sync span').textContent = '手機同步…';
+  $('#btn-sync').onclick = () => {
+    syncDialog.onClose = () => { clearTimeout(pairTimer); syncApi.cancelPairing(); };
+    syncDialog.open('');
+    renderServerDialog();
+  };
+  syncApi.onEvent((evt) => {
+    if (evt.type === 'paired') { toast(`已和「${evt.name}」配對`); if (syncDialog.isOpen) renderServerDialog(); }
+    if (evt.type === 'status' && syncDialog.isOpen) renderServerDialog();
+    if (evt.type === 'sync-done' && syncDialog.isOpen) renderServerDialog();
+  });
+  syncApi.onAsk(async (op, payload) => {
+    if (op === 'state') {
+      syncOverlay.show('手機同步中，請稍候…');
+      flushEditor();
+      if (vault.unlocked) await lockVault();
+      await persist(true);
+      return { notes: db.notes, folders: db.folders, tombstones: db.tombstones };
+    }
+    if (op === 'apply') {
+      const openId = state.currentId;
+      adoptMerged(payload.db);
+      if (payload.vaultChanged) vault.exists = true;
+      await api.save(db);
+      api.cleanupImages();
+      syncOverlay.hide();
+      if (openId) {
+        const n = db.notes.find((x) => x.id === openId && !x.deletedAt);
+        state.currentId = null;
+        if (n) openEditor(openId);
+        else { $('#editor-view').classList.add('hidden'); $('#list-view').classList.remove('hidden'); }
+      }
+      render();
+      toast('已和手機同步完成');
+      return true;
+    }
+    if (op === 'abort') { syncOverlay.hide(); return true; }
+    throw new Error(`unknown ${op}`);
+  });
+}
+
+// ----- phone side
+
+async function updateSyncLast() {
+  const p = await syncApi.getPairing();
+  $('#sync-last').textContent = p ? `${p.pcName || '電腦'}・上次同步：${formatWhen(p.lastSync)}` : '';
+  $('#btn-sync-settings').classList.toggle('hidden', !p);
+}
+
+function pairDialog(message = '') {
+  return new Promise((resolve) => {
+    syncDialog.onClose = () => resolve(null);
+    syncDialog.open(`
+      <h3>和電腦配對</h3>
+      <p>1. 在電腦的 DeskNotes 點左下角「📱 手機同步…」→「配對新手機」<br>2. 輸入電腦上顯示的位址和配對碼</p>
+      ${message ? `<div class="err">${escapeHtml(message)}</div>` : ''}
+      <form id="pair-form" autocomplete="off">
+        <label class="field">電腦位址</label>
+        <input id="pair-addr" placeholder="例如 192.168.1.23" inputmode="decimal">
+        <label class="field">配對碼（6 位數字）</label>
+        <input id="pair-code" placeholder="例如 482913" inputmode="numeric" maxlength="7">
+        <div class="err" id="pair-err"></div>
+        <div class="modal-actions">
+          <button type="button" class="text-btn" id="pair-cancel">取消</button>
+          <button type="submit" class="text-btn primary" id="pair-ok">配對</button>
+        </div>
+      </form>`);
+    syncApi.getPairing().then((p) => { if (p) $('#pair-addr').value = p.address; });
+    $('#pair-cancel').onclick = () => syncDialog.close();
+    $('#pair-form').onsubmit = async (e) => {
+      e.preventDefault();
+      const addr = $('#pair-addr').value.trim();
+      const code = $('#pair-code').value.replace(/\D/g, '');
+      if (!addr || code.length !== 6) { $('#pair-err').textContent = '請輸入電腦位址和 6 位數配對碼'; return; }
+      $('#pair-ok').disabled = true;
+      $('#pair-ok').textContent = '配對中…';
+      try {
+        const p = await syncApi.pair(addr, code);
+        syncDialog.onClose = null;
+        syncDialog.close();
+        toast(`已和「${p.pcName}」配對`);
+        resolve(p);
+      } catch (err) {
+        $('#pair-err').textContent = err.message;
+        $('#pair-ok').disabled = false;
+        $('#pair-ok').textContent = '配對';
+      }
+    };
+  });
+}
+
+const chunk = (arr, n) => Array.from({ length: Math.ceil(arr.length / n) }, (_, i) => arr.slice(i * n, i * n + n));
+
+async function runPhoneSync() {
+  let pairing = await syncApi.getPairing();
+  if (!pairing) {
+    pairing = await pairDialog();
+    if (!pairing) return;
+  }
+  if (state.currentId) closeEditor();
+  const step = (t) => syncOverlay.show(t);
+  let connected = false;
+  try {
+    step('連線到電腦…');
+    await persist(true);
+    const remote = await syncApi.request('state');
+    connected = true;
+    const lastSync = pairing.lastSync || 0;
+    const merged = SyncMerge.mergeData({ notes: db.notes, folders: db.folders, tombstones: db.tombstones }, remote.db, { lastSync });
+    const lines = [];
+
+    // plain images
+    step('同步圖片…');
+    const need = SyncMerge.imageRefs(merged.data.notes, 'img');
+    const mine = new Set(await syncApi.localImages(false));
+    const theirs = new Set(remote.images);
+    const down = [...need].filter((n) => theirs.has(n) && !mine.has(n));
+    const up = [...need].filter((n) => mine.has(n) && !theirs.has(n));
+    for (const names of chunk(down, 8)) await syncApi.writeImages((await syncApi.request('getImages', { names, vault: false })).files, false);
+    for (const names of chunk(up, 8)) await syncApi.request('putImages', { files: await syncApi.readImages(names, false), vault: false });
+
+    // locked notes
+    let vaultEnvelope = null;
+    let vaultMerged = null;
+    if (remote.vault && !vault.exists) {
+      step('取得上鎖筆記…');
+      const files = {};
+      for (const names of chunk(remote.vault.images, 8)) Object.assign(files, (await syncApi.request('getImages', { names, vault: true })).files);
+      await syncApi.adoptVault(remote.vault.envelope, files);
+      vault.exists = true;
+      lines.push('已從電腦取得上鎖筆記，請用電腦上的上鎖密碼解鎖。');
+    } else if (vault.unlocked) {
+      let theirsVault = { notes: [], folders: [], tombstones: {} };
+      let ok = true;
+      if (remote.vault) {
+        step('解開電腦的上鎖筆記…');
+        const opened = await syncApi.openForeignVault(remote.vault.envelope);
+        if (opened) theirsVault = opened;
+        else { ok = false; lines.push('⚠ 電腦的上鎖筆記密碼和手機不同，上鎖筆記沒有同步。'); }
+      }
+      if (ok) {
+        step('同步上鎖筆記…');
+        vaultMerged = SyncMerge.mergeData(vaultPayload(), theirsVault, { lastSync });
+        const vNeed = SyncMerge.imageRefs(vaultMerged.data.notes, 'vault');
+        const vMine = new Set(await syncApi.localImages(true));
+        const vTheirs = new Set(remote.vault ? remote.vault.images : []);
+        for (const names of chunk([...vNeed].filter((n) => vTheirs.has(n) && !vMine.has(n)), 8)) {
+          await syncApi.importForeignVaultImages((await syncApi.request('getImages', { names, vault: true })).files);
+        }
+        for (const names of chunk([...vNeed].filter((n) => vMine.has(n) && !vTheirs.has(n)), 8)) {
+          await syncApi.request('putImages', { files: await syncApi.exportVaultImagesForForeign(names), vault: true });
+        }
+        vaultEnvelope = await syncApi.sealForeignVault(vaultMerged.data);
+      }
+    } else if (vault.exists && remote.vault) {
+      lines.push('上鎖筆記沒有同步（手機的上鎖筆記尚未解鎖）。');
+    }
+
+    step('寫入電腦…');
+    await syncApi.request('apply', { db: merged.data, vault: vaultEnvelope });
+    adoptMerged(merged.data);
+    if (vaultMerged) {
+      vault.notes = vaultMerged.data.notes;
+      vault.folders = vaultMerged.data.folders;
+      vault.tombstones = vaultMerged.data.tombstones;
+      repairFolders('vault');
+      resetSnapshot('vault');
+      await api.vault.save(vaultPayload());
+    }
+    await api.save(db);
+    api.cleanupImages();
+    await syncApi.update({ lastSync: Date.now() });
+    syncApi.endSync();
+    syncOverlay.hide();
+    render();
+    updateSyncLast();
+
+    const conflicts = merged.conflicts + (vaultMerged ? vaultMerged.conflicts : 0);
+    const summary = [
+      `電腦 → 手機：${merged.toLocal + (vaultMerged ? vaultMerged.toLocal : 0)} 項更新${down.length ? `、${down.length} 張圖片` : ''}`,
+      `手機 → 電腦：${merged.toRemote + (vaultMerged ? vaultMerged.toRemote : 0)} 項更新${up.length ? `、${up.length} 張圖片` : ''}`,
+    ];
+    if (conflicts) summary.push(`${conflicts} 則筆記兩邊都修改過：保留較新的版本，舊版已放到垃圾筒。`);
+    openModal({ title: '同步完成', text: summary.concat(lines).join('\n'), okText: '好' });
+  } catch (err) {
+    syncApi.endSync();
+    syncOverlay.hide();
+    if (connected) { try { await syncApi.request('abort'); } catch { /* ignore */ } }
+    if (['not-paired', 'bad-key'].includes(err.code)) {
+      if (await pairDialog(`${err.message}`)) runPhoneSync();
+    } else if (err.code === 'unreachable') {
+      const choice = await openModal({
+        title: '連不到電腦', text: err.message,
+        options: [{ value: 'retry', label: '再試一次' }, { value: 'addr', label: '電腦位址變了，重新輸入' }],
+        okText: '確定',
+      });
+      if (choice === 'retry') runPhoneSync();
+      if (choice === 'addr') { const addr = await openModal({ title: '電腦位址', text: '在電腦的「手機同步」視窗可以看到位址', input: pairing.address }); if (addr) { await syncApi.update({ address: addr }); runPhoneSync(); } }
+    } else {
+      openModal({ title: '同步失敗', text: err.message, okText: '好' });
+    }
+  }
+}
+
+function initClientSync() {
+  $('#btn-sync span').textContent = '與電腦同步';
+  $('#btn-sync').onclick = () => { closeDrawer(); runPhoneSync(); };
+  $('#btn-sync-settings').onclick = async () => {
+    closeDrawer();
+    const p = await syncApi.getPairing();
+    const choice = await openModal({
+      title: '同步設定',
+      text: `已配對：${p.pcName || '電腦'}（${p.address}）\n上次同步：${formatWhen(p.lastSync)}`,
+      options: [{ value: 'addr', label: '修改電腦位址' }, { value: 'repair', label: '重新配對' }, { value: 'unpair', label: '取消配對' }],
+      okText: '確定',
+    });
+    if (choice === 'addr') { const addr = await openModal({ title: '電腦位址', input: p.address }); if (addr) await syncApi.update({ address: addr }); }
+    if (choice === 'repair') await pairDialog();
+    if (choice === 'unpair' && await openModal({ title: '取消和電腦的配對？', text: '筆記不會被刪除；之後要同步需重新配對。', okText: '取消配對', danger: true })) await syncApi.unpair();
+    updateSyncLast();
+  };
+  updateSyncLast();
+}
+
+if (syncApi && syncApi.role === 'server') initServerSync();
+else if (syncApi && syncApi.role === 'client') initClientSync();
+else $('.sync-row').classList.add('hidden');
+
 // ---------------------------------------------------------------- mobile
 
 // On phones the sidebar is a drawer opened from the ☰ button.
@@ -1964,6 +2337,8 @@ $('#drawer-backdrop').addEventListener('click', closeDrawer);
 // Android back button: close the top-most thing; false lets the app go to the background.
 function handleBack() {
   const shown = (sel) => !$(sel).classList.contains('hidden');
+  if (shown('#sync-overlay')) return true;
+  if (shown('#sync-dialog')) { syncDialog.close(); return true; }
   if (shown('#import-dialog')) { $('#import-cancel').click(); return true; }
   if (shown('#modal')) { $('#modal-cancel').click(); return true; }
   if (document.documentElement.classList.contains('drawer-open')) { closeDrawer(); return true; }
@@ -1986,7 +2361,9 @@ if (api.onBack) api.onBack(handleBack);
   db = await api.load();
   db.folders ||= [];
   db.notes ||= [];
+  db.tombstones ||= {};
   repairFolders('db');
+  resetSnapshot('db');
   state.prefs.collapsed ||= {};
   vault.exists = (await api.vault.status()).exists;
   if (purgeOldTrash()) { await persist(true); api.cleanupImages(); }

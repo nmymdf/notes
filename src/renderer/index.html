@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; img-src 'self' note-img: data: blob: https: http:; style-src 'self' 'unsafe-inline'; script-src 'self'">
+        content="default-src 'self'; connect-src 'self' http: https:; img-src 'self' note-img: data: blob: https: http:; style-src 'self' 'unsafe-inline'; script-src 'self'">
   <title>DeskNotes  —  designer: ArchieKuo</title>
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -37,6 +37,8 @@
     <symbol id="i-import" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/></symbol>
     <symbol id="i-table" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M3 14.5h18M9 4v16"/></symbol>
     <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M4 13l2.5-8h11L20 13v6H4z"/><path d="M4 13h5l1 2h4l1-2h5"/></symbol>
+    <symbol id="i-sync" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.3-4.9L4 8M4 4v4h4M4 13a8 8 0 0 0 14.3 4.9L20 16M20 20v-4h-4"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
     <symbol id="i-move" viewBox="0 0 24 24"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M10 13h6M13 10l3 3-3 3"/></symbol>
   </svg>
 
@@ -59,6 +61,11 @@
         <div id="folder-list"></div>
       </nav>
       <a class="nav-item trash-bottom" data-view="trash"><svg><use href="#i-trash"/></svg><span>垃圾筒</span><em id="count-trash"></em></a>
+      <div class="sync-row">
+        <button class="import-btn" id="btn-sync"><svg><use href="#i-sync"/></svg><span>手機同步…</span></button>
+        <button class="icon-btn small hidden" id="btn-sync-settings" title="同步設定"><svg><use href="#i-gear"/></svg></button>
+      </div>
+      <div id="sync-last" class="sync-last"></div>
       <button class="import-btn" id="btn-import-outlook" title="匯入 Outlook 2010 匯出的記事 CSV 檔"><svg><use href="#i-import"/></svg><span>匯入 Outlook 記事…</span></button>
       <button class="import-btn undo hidden" id="btn-undo-import" title="把上次從 Outlook 匯入的筆記全部移到垃圾筒"><svg><use href="#i-trash"/></svg><span></span></button>
       <div class="sidebar-foot">快速筆記：Ctrl + Alt + N</div>
@@ -229,10 +236,13 @@
       </div>
     </form>
   </div>
+  <div id="sync-dialog" class="modal hidden"><div class="modal-box wide" id="sync-box"></div></div>
+  <div id="sync-overlay" class="sync-overlay hidden"><div class="box"><div class="spinner"></div><div id="sync-overlay-text"></div></div></div>
   <div id="context-menu" class="context-menu hidden"></div>
   <div id="lightbox" class="lightbox hidden"><img alt=""></div>
   <div id="toast" class="toast hidden"></div>
 
+  <script src="sync-merge.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

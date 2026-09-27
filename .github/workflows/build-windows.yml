@@ -39,6 +39,7 @@ jobs:
       - run: npm ci
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+      - run: npm test
       - run: npm run android
       - name: Build APK
         working-directory: android

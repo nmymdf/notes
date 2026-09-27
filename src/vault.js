@@ -60,7 +60,7 @@ class Vault {
 
   // payload = { notes, folders }
   writePayload(payload, key = this.key, meta = this.meta) {
-    const body = { notes: payload.notes || [], folders: payload.folders || [] };
+    const body = { notes: payload.notes || [], folders: payload.folders || [], tombstones: payload.tombstones || {} };
     const { iv, tag, data } = Vault.encrypt(key, Buffer.from(JSON.stringify(body), 'utf8'));
     const env = {
       version: 1, kdf: 'scrypt', N: meta.N, r: meta.r, p: meta.p,
@@ -96,7 +96,7 @@ class Vault {
     this.key = key;
     this.meta = { N: env.N, r: env.r, p: env.p, salt: env.salt };
     const body = JSON.parse(plain.toString('utf8'));
-    return { notes: body.notes || [], folders: body.folders || [] };
+    return { notes: body.notes || [], folders: body.folders || [], tombstones: body.tombstones || {} };
   }
 
   lock() {

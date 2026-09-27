@@ -25,5 +25,23 @@ contextBridge.exposeInMainWorld('notesAPI', {
     await cb();
     ipcRenderer.send('app:flushed');
   }),
+  // Phone sync: the computer side (server) — see src/sync-server.js.
+  sync: {
+    role: 'server',
+    status: () => ipcRenderer.invoke('sync:status'),
+    setEnabled: (on) => ipcRenderer.invoke('sync:set-enabled', on),
+    startPairing: () => ipcRenderer.invoke('sync:start-pairing'),
+    cancelPairing: () => ipcRenderer.invoke('sync:cancel-pairing'),
+    removeDevice: (id) => ipcRenderer.invoke('sync:remove-device', id),
+    onEvent: (cb) => ipcRenderer.on('sync:event', (_e, evt) => cb(evt)),
+    // The server asks the renderer for its notes / to adopt merged notes.
+    onAsk: (cb) => ipcRenderer.on('sync:ask', async (_e, { id, op, payload }) => {
+      try {
+        ipcRenderer.send('sync:answer', { id, result: await cb(op, payload) });
+      } catch (err) {
+        ipcRenderer.send('sync:answer', { id, error: err.message });
+      }
+    }),
+  },
   onNewNote: (cb) => ipcRenderer.on('app:new-note', () => cb()),
 });

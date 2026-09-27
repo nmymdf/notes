@@ -7,7 +7,7 @@
 // Locked notes use the same crypto as src/vault.js: scrypt(N=2^17, r=8, p=1)
 // → AES-256-GCM, so the files are interchangeable with the Windows version.
 
-import { Capacitor } from '@capacitor/core';
+import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { App } from '@capacitor/app';
 import { scryptAsync } from '@noble/hashes/scrypt.js';
@@ -123,11 +123,13 @@ async function unpackImage(key, buf) {
   return decrypt(key, buf.subarray(0, 12), buf.subarray(12, 28), buf.subarray(28));
 }
 
-const vault = { key: null, meta: null, lastNotes: null };
+// The password is kept in memory while unlocked, only to open the computer's
+// vault during a sync when it was created with a different salt.
+const vault = { key: null, meta: null, lastNotes: null, password: null };
 const blobCache = new Map(); // note-img URL → object URL
 
 async function writeVault(payload, key = vault.key, meta = vault.meta) {
-  const body = { notes: payload.notes || [], folders: payload.folders || [] };
+  const body = { notes: payload.notes || [], folders: payload.folders || [], tombstones: payload.tombstones || {} };
   const { iv, tag, data } = await encrypt(key, new TextEncoder().encode(JSON.stringify(body)));
   await writeTextSafe(VAULT_FILE, JSON.stringify({
     version: 1, kdf: 'scrypt', N: meta.N, r: meta.r, p: meta.p,
@@ -142,7 +144,7 @@ async function unlockWith(password) {
   try {
     const plain = await decrypt(key, fromB64(env.iv), fromB64(env.tag), fromB64(env.data));
     const body = JSON.parse(new TextDecoder().decode(plain));
-    return { key, meta, payload: { notes: body.notes || [], folders: body.folders || [] } };
+    return { key, meta, payload: { notes: body.notes || [], folders: body.folders || [], tombstones: body.tombstones || {} } };
   } catch {
     return null;
   }
@@ -158,6 +160,167 @@ async function saveImage(bytes, mime, inVault) {
   await writeBytes(`${IMG_DIR}/${name}`, bytes);
   return `note-img://img/${name}`;
 }
+
+
+// ---------- sync with the computer (client side; see src/sync-server.js) ----------
+
+const SYNC_FILE = `${ROOT}/sync.json`;
+const SYNC_PORT = 47821;
+const foreign = { key: null, meta: null }; // the computer's vault key while syncing
+const enc = (s) => new TextEncoder().encode(s);
+
+async function hmacB64(code, msg) {
+  const k = await crypto.subtle.importKey('raw', enc(code), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  return toB64(new Uint8Array(await crypto.subtle.sign('HMAC', k, enc(msg))));
+}
+async function transportKey(rawB64) {
+  return crypto.subtle.importKey('raw', fromB64(rawB64), 'AES-GCM', false, ['encrypt', 'decrypt']);
+}
+async function sealMsg(key, obj) {
+  const { iv, tag, data } = await encrypt(key, enc(JSON.stringify(obj)));
+  return { iv: toB64(iv), c: toB64(concat(data, tag)) };
+}
+async function openMsg(key, { iv, c }) {
+  const buf = fromB64(c);
+  const plain = await decrypt(key, fromB64(iv), buf.subarray(buf.length - 16), buf.subarray(0, buf.length - 16));
+  return JSON.parse(new TextDecoder().decode(plain));
+}
+
+const baseUrl = (address) => (/:\d+$/.test(address) ? `http://${address}` : `http://${address}:${SYNC_PORT}`);
+
+async function post(url, data) {
+  let res;
+  try {
+    res = await CapacitorHttp.request({
+      url, method: 'POST', data, headers: { 'Content-Type': 'application/json' },
+      responseType: 'json', connectTimeout: 8000, readTimeout: 120000,
+    });
+  } catch {
+    const err = new Error('連不到電腦。請確認電腦上的 DeskNotes 有開著，而且手機和電腦連在同一個 Wi-Fi。');
+    err.code = 'unreachable';
+    throw err;
+  }
+  const body = typeof res.data === 'string' ? JSON.parse(res.data || '{}') : res.data;
+  if (res.status !== 200) {
+    const err = new Error(body.message || `電腦回應錯誤 (${res.status})`);
+    err.code = body.error;
+    throw err;
+  }
+  return body;
+}
+
+async function readPairing() {
+  try { return JSON.parse(await readText(SYNC_FILE)); } catch { return null; }
+}
+async function writePairing(p) { await writeText(SYNC_FILE, JSON.stringify(p)); }
+
+async function foreignKeyFor(envelopeText) {
+  const env = JSON.parse(envelopeText);
+  const meta = { N: env.N, r: env.r, p: env.p, salt: fromB64(env.salt) };
+  if (vault.meta && toB64(vault.meta.salt) === env.salt) return { key: vault.key, meta: vault.meta, env };
+  if (foreign.meta && toB64(foreign.meta.salt) === env.salt) return { key: foreign.key, meta: foreign.meta, env };
+  const key = await deriveKey(vault.password, meta.salt, meta);
+  return { key, meta, env };
+}
+
+const syncApi = {
+  role: 'client',
+  getPairing: readPairing,
+  async pair(address, code) {
+    const url = baseUrl(address.trim());
+    const pair = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']);
+    const pub = toB64(new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey)));
+    const deviceId = `phone-${toB64(crypto.getRandomValues(new Uint8Array(9))).replace(/[^a-z0-9]/gi, '')}`;
+    const start = await post(`${url}/pair/start`, { deviceId, name: 'Android 手機', pub });
+    if (start.proof !== await hmacB64(code, `pc|${pub}|${start.pcPub}`)) {
+      const err = new Error('配對碼錯誤，請確認電腦上顯示的 6 位數字');
+      err.code = 'bad-code';
+      throw err;
+    }
+    const pcKey = await crypto.subtle.importKey('raw', fromB64(start.pcPub), { name: 'ECDH', namedCurve: 'P-256' }, false, []);
+    const shared = await crypto.subtle.deriveBits({ name: 'ECDH', public: pcKey }, pair.privateKey, 256);
+    const hk = await crypto.subtle.importKey('raw', shared, 'HKDF', false, ['deriveBits']);
+    const key = new Uint8Array(await crypto.subtle.deriveBits(
+      { name: 'HKDF', hash: 'SHA-256', salt: enc('desknotes-sync'), info: enc('v1') }, hk, 256));
+    await post(`${url}/pair/finish`, { deviceId, proof: await hmacB64(code, `phone|${pub}|${start.pcPub}`) });
+    const pairing = { address: address.trim(), deviceId, key: toB64(key), pcName: start.pcName, lastSync: 0 };
+    await writePairing(pairing);
+    return pairing;
+  },
+  async update(changes) {
+    const p = await readPairing();
+    if (p) await writePairing({ ...p, ...changes });
+  },
+  async unpair() { await remove(SYNC_FILE); },
+  async request(op, payload) {
+    const p = await readPairing();
+    if (!p) throw new Error('尚未配對');
+    const key = await transportKey(p.key);
+    const res = await post(`${baseUrl(p.address)}/sync`, { d: p.deviceId, ...(await sealMsg(key, { t: Date.now(), op, payload })) });
+    const out = await openMsg(key, res);
+    if (!out.ok) throw new Error(out.error);
+    return out.result;
+  },
+
+  // images: { name: base64 } — vault images are exchanged still encrypted
+  localImages: async (inVault) => listFiles(inVault ? VAULT_IMG_DIR : IMG_DIR),
+  async readImages(names, inVault) {
+    const files = {};
+    for (const n of names) files[n] = toB64(await readBytes(`${inVault ? VAULT_IMG_DIR : IMG_DIR}/${n}`));
+    return files;
+  },
+  async writeImages(files, inVault) {
+    for (const [n, data] of Object.entries(files)) await writeBytes(`${inVault ? VAULT_IMG_DIR : IMG_DIR}/${n}`, fromB64(data));
+  },
+
+  // ----- the computer's vault (needs the phone to be unlocked, same password)
+  async openForeignVault(envelopeText) {
+    if (!vault.key) return null;
+    const { key, meta, env } = await foreignKeyFor(envelopeText);
+    try {
+      const plain = await decrypt(key, fromB64(env.iv), fromB64(env.tag), fromB64(env.data));
+      Object.assign(foreign, { key, meta });
+      const body = JSON.parse(new TextDecoder().decode(plain));
+      return { notes: body.notes || [], folders: body.folders || [], tombstones: body.tombstones || {} };
+    } catch {
+      return null; // different password on the computer
+    }
+  },
+  // Encrypt the merged vault for the computer (with its key, or ours if it had none).
+  async sealForeignVault(payload) {
+    const key = foreign.key || vault.key;
+    const meta = foreign.meta || vault.meta;
+    const body = { notes: payload.notes || [], folders: payload.folders || [], tombstones: payload.tombstones || {} };
+    const { iv, tag, data } = await encrypt(key, enc(JSON.stringify(body)));
+    return JSON.stringify({
+      version: 1, kdf: 'scrypt', N: meta.N, r: meta.r, p: meta.p,
+      salt: toB64(meta.salt), iv: toB64(iv), tag: toB64(tag), data: toB64(data),
+    });
+  },
+  // Vault images: re-encrypt between the phone's and the computer's key.
+  async importForeignVaultImages(files) {
+    const from = foreign.key || vault.key;
+    for (const [n, data] of Object.entries(files)) {
+      const plain = await unpackImage(from, fromB64(data));
+      await writeBytes(`${VAULT_IMG_DIR}/${n}`, await packImage(vault.key, plain));
+    }
+  },
+  async exportVaultImagesForForeign(names) {
+    const to = foreign.key || vault.key;
+    const files = {};
+    for (const n of names) {
+      const plain = await unpackImage(vault.key, await readBytes(`${VAULT_IMG_DIR}/${n}`));
+      files[n] = toB64(await packImage(to, plain));
+    }
+    return files;
+  },
+  // The phone has no vault yet: take the computer's as is (unlock with its password).
+  async adoptVault(envelopeText, files) {
+    await writeTextSafe(VAULT_FILE, envelopeText);
+    await syncApi.writeImages(files, true);
+  },
+  endSync() { foreign.key = null; foreign.meta = null; },
+};
 
 // ---------- public API ----------
 
@@ -233,13 +396,13 @@ const api = {
       const meta = { ...KDF, salt: crypto.getRandomValues(new Uint8Array(16)) };
       const key = await deriveKey(password, meta.salt, meta);
       await writeVault({}, key, meta);
-      Object.assign(vault, { key, meta });
+      Object.assign(vault, { key, meta, password });
       return { notes: [], folders: [] };
     },
     async unlock(password) {
       const res = await unlockWith(password);
       if (!res) return null;
-      Object.assign(vault, { key: res.key, meta: res.meta });
+      Object.assign(vault, { key: res.key, meta: res.meta, password });
       return res.payload;
     },
     async save(payload) {
@@ -255,7 +418,9 @@ const api = {
         for (const f of await listFiles(VAULT_IMG_DIR)) if (!used.has(f)) await remove(`${VAULT_IMG_DIR}/${f}`);
       }
       for (const [url, obj] of blobCache) if (url.startsWith('note-img://vault/')) { URL.revokeObjectURL(obj); blobCache.delete(url); }
-      Object.assign(vault, { key: null, meta: null, lastNotes: null });
+      Object.assign(vault, { key: null, meta: null, lastNotes: null, password: null });
+      foreign.key = null;
+      foreign.meta = null;
       return true;
     },
     async changePassword(oldPw, newPw) {
@@ -269,7 +434,9 @@ const api = {
       }
       await writeVault(res.payload, key, meta);
       await remove(`${VAULT_FILE}.bak`);
-      Object.assign(vault, { key, meta });
+      Object.assign(vault, { key, meta, password: newPw });
+      foreign.key = null;
+      foreign.meta = null;
       return true;
     },
     // Re-store a note's images encrypted (moving into the vault) or plain (moving out).
@@ -296,6 +463,8 @@ const api = {
       return out;
     },
   },
+
+  sync: syncApi,
 
   // Desktop-only features: the renderer hides their buttons on mobile.
   importOutlook: async () => null,
