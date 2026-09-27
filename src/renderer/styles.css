@@ -48,6 +48,8 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .nav-section svg { width: 18px; height: 18px; }
 #folder-list .nav-item { padding-left: 22px; font-size: 16px; }
 #folder-list .nav-item svg { width: 20px; height: 20px; }
+.trash-bottom { border-top: 1px dashed #555; border-radius: 0 0 10px 10px; margin-top: 8px; padding-top: 14px; }
+#sidebar.collapsed .trash-bottom span, #sidebar.collapsed .trash-bottom em { display: none; }
 .import-btn {
   display: flex; align-items: center; gap: 14px; padding: 10px 12px; border-radius: 10px; cursor: pointer;
   background: none; border: 0; width: 100%; font-size: 15px; color: var(--muted); text-align: left;
@@ -97,13 +99,13 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .sortbar .sep { margin: 0 8px; }
 
 #notes { flex: 1; overflow-y: auto; padding: 14px 44px 40px; align-content: start; }
-#notes.grid { display: grid; grid-template-columns: repeat(auto-fill, 156px); gap: 22px 26px; }
+#notes.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 18px 18px; padding-right: 28px; }
 #notes.list { display: flex; flex-direction: column; gap: 8px; }
 
 .note-card { cursor: pointer; user-select: none; position: relative; }
 .note-card .thumb {
-  width: 156px; height: 156px; background: var(--card); border-radius: 14px;
-  padding: 10px; overflow: hidden; font-size: 13.5px; line-height: 1.5; position: relative;
+  width: 100%; aspect-ratio: 1; background: var(--card); border-radius: 12px;
+  padding: 9px; overflow: hidden; font-size: 12.5px; line-height: 1.5; position: relative;
   word-break: break-word;
 }
 .note-card .thumb::after {
@@ -113,11 +115,11 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .note-card:hover .thumb { background: var(--card-hover); }
 .note-card:hover .thumb::after { background: linear-gradient(transparent, var(--card-hover)); }
 .note-card .thumb img { width: 100%; border-radius: 8px; display: block; margin-bottom: 6px; }
-.note-card .thumb img.with-text { max-height: 70px; object-fit: cover; }
+.note-card .thumb img.with-text { max-height: 55%; object-fit: cover; }
 .note-card .thumb .snippet { white-space: pre-line; }
-.note-card .meta { text-align: center; padding-top: 10px; }
-.note-card .meta b { display: block; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.note-card .meta small { color: var(--muted); font-size: 12.5px; }
+.note-card .meta { text-align: center; padding-top: 8px; }
+.note-card .meta b { display: block; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.note-card .meta small { color: var(--muted); font-size: 12px; }
 .note-card .star-badge { position: absolute; top: 8px; right: 8px; color: var(--accent); z-index: 1; }
 .note-card .star-badge svg { width: 18px; height: 18px; fill: currentColor; }
 .note-card .check {

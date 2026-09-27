@@ -45,7 +45,6 @@
       <nav>
         <a class="nav-item" data-view="all"><svg><use href="#i-notes"/></svg><span>所有筆記</span><em id="count-all"></em></a>
         <a class="nav-item" data-view="starred"><svg><use href="#i-star"/></svg><span>我的最愛</span><em id="count-starred"></em></a>
-        <a class="nav-item" data-view="trash"><svg><use href="#i-trash"/></svg><span>垃圾筒</span><em id="count-trash"></em></a>
         <a class="nav-item" data-view="vault"><svg><use href="#i-lock"/></svg><span>上鎖筆記</span><em id="count-vault"></em></a>
         <hr>
         <div class="nav-section">
@@ -54,6 +53,7 @@
         </div>
         <div id="folder-list"></div>
       </nav>
+      <a class="nav-item trash-bottom" data-view="trash"><svg><use href="#i-trash"/></svg><span>垃圾筒</span><em id="count-trash"></em></a>
       <button class="import-btn" id="btn-import-outlook" title="匯入 Outlook 2010 匯出的記事 CSV 檔"><svg><use href="#i-import"/></svg><span>匯入 Outlook 記事…</span></button>
       <button class="import-btn undo hidden" id="btn-undo-import" title="把上次從 Outlook 匯入的筆記全部移到垃圾筒"><svg><use href="#i-trash"/></svg><span></span></button>
       <div class="sidebar-foot">快速筆記：Ctrl + Alt + N</div>
