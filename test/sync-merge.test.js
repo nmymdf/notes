@@ -98,4 +98,27 @@ test('old tombstones are forgotten after a year', () => {
   assert.deepStrictEqual(Object.keys(m.data.tombstones), ['recent']);
 });
 
+const file = (id, rev, extra = {}) => ({ id, name: `${id}.txt`, folderId: 'F', size: 1, hash: `h-${id}`, rev, createdAt: 1, deletedAt: null, ...extra });
+const ff = { id: 'F', name: 'F', kind: 'files', parentId: null, rev: 1, createdAt: 1 };
+
+test('files: newer record wins, missing ones copied', () => {
+  const m = mergeData({ folders: [ff], files: [file('a', 10), file('b', 30, { name: 'new.txt' })] },
+    { folders: [ff], files: [file('b', 20), file('c', 5)] }, { lastSync: 1, now: 100 });
+  assert.deepStrictEqual(m.data.files.map((f) => f.id).sort(), ['a', 'b', 'c']);
+  assert.strictEqual(m.data.files.find((f) => f.id === 'b').name, 'new.txt');
+});
+
+test('files: same file added on both devices is kept once', () => {
+  const m = mergeData({ folders: [ff], files: [file('a', 10, { name: 'x.mp3', hash: 'H' })] },
+    { folders: [ff], files: [file('b', 20, { name: 'x.mp3', hash: 'H' })] }, { now: 100 });
+  assert.strictEqual(m.data.files.length, 1);
+  assert.ok(m.data.tombstones.b || m.data.tombstones.a);
+});
+
+test('files: folder removed on the other side → files go to the trash', () => {
+  const m = mergeData({ folders: [ff], files: [file('a', 10)] }, { folders: [], files: [file('a', 10)], tombstones: { F: 50 } }, { lastSync: 20, now: 100 });
+  assert.strictEqual(m.data.folders.length, 0);
+  assert.strictEqual(m.data.files[0].deletedAt, 100);
+});
+
 console.log(`\n${passed} tests passed`);

@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('notesAPI', {
   load: () => ipcRenderer.invoke('db:load'),
@@ -25,6 +25,17 @@ contextBridge.exposeInMainWorld('notesAPI', {
     await cb();
     ipcRenderer.send('app:flushed');
   }),
+  // File folders: real directories on disk (src/files-store.js).
+  files: {
+    scan: (folders, files) => ipcRenderer.invoke('files:scan', folders, files),
+    pick: () => ipcRenderer.invoke('files:pick'),
+    add: (folders, folderId, paths) => ipcRenderer.invoke('files:add', folders, folderId, paths),
+    materialize: (before, after, preserve) => ipcRenderer.invoke('files:materialize', before, after, preserve),
+    open: (folders, file) => ipcRenderer.invoke('files:open', folders, file),
+    show: (folders, file) => ipcRenderer.invoke('files:show', folders, file),
+    openFolder: (folders, folderId) => ipcRenderer.invoke('files:open-folder', folders, folderId),
+    pathOf: (file) => webUtils.getPathForFile(file),
+  },
   // Phone sync: the computer side (server) — see src/sync-server.js.
   sync: {
     role: 'server',

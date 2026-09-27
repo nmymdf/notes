@@ -125,7 +125,7 @@ function snapshotItems(scope, bump) {
   const now = Date.now();
   const seen = new Set();
   data.tombstones ||= {};
-  for (const [prefix, list] of [['n', data.notes], ['f', data.folders]]) {
+  for (const [prefix, list] of [['n', data.notes], ['f', data.folders], ['x', data.files || []]]) {
     for (const it of list) {
       const key = `${prefix}:${it.id}`;
       const { rev, ...rest } = it;
@@ -170,9 +170,10 @@ function persist(immediate = false) {
 
 function purgeOldTrash() {
   const cutoff = Date.now() - TRASH_DAYS * 86400000;
-  const before = db.notes.length;
+  const before = db.notes.length + db.files.length;
   db.notes = db.notes.filter((n) => !n.deletedAt || n.deletedAt > cutoff);
-  return db.notes.length !== before;
+  db.files = db.files.filter((f) => !f.deletedAt || f.deletedAt > cutoff);
+  return db.notes.length + db.files.length !== before;
 }
 
 // ---------------------------------------------------------------- modal / menus
@@ -268,6 +269,9 @@ const childrenOf = (scope, parentId) => foldersOf(scope)
   .filter((f) => (f.parentId || null) === parentId)
   .sort((a, b) => (a.order ?? a.createdAt) - (b.order ?? b.createdAt));
 const hasChildren = (id) => foldersOf(folderScope(id)).some((f) => f.parentId === id);
+// Folders hold either notes (default) or files (kind 'files', only in the normal area).
+const isFileFolder = (id) => findFolder(id)?.kind === 'files';
+const kindOf = (f) => f.kind || 'notes';
 function folderAndChildrenIds(id) {
   return [id, ...foldersOf(folderScope(id)).filter((f) => f.parentId === id).map((f) => f.id)];
 }
@@ -280,9 +284,10 @@ function repairFolders(scope) {
   for (const f of list) if (f.parentId && !list.some((p) => p.id === f.parentId && !p.parentId)) f.parentId = null;
 }
 
-function folderOptions(scope = 'db', includeNone = true) {
+function folderOptions(scope = 'db', includeNone = true, kind = 'notes') {
   const opts = includeNone ? [{ value: '', label: scope === 'vault' ? '（上鎖筆記，不分資料夾）' : '（未分類）' }] : [];
   for (const f of childrenOf(scope, null)) {
+    if (kindOf(f) !== kind) continue;
     opts.push({ value: f.id, label: f.name });
     for (const c of childrenOf(scope, f.id)) opts.push({ value: c.id, label: `　└ ${c.name}` });
   }
@@ -321,9 +326,10 @@ function renderSidebar() {
 
 function renderFolderTree(list, scope, notes) {
   list.innerHTML = '';
+  const liveFiles = (db.files || []).filter((f) => !f.deletedAt);
   const count = (id) => {
     const ids = folderAndChildrenIds(id);
-    return notes.filter((n) => ids.includes(n.folderId)).length;
+    return (isFileFolder(id) ? liveFiles : notes).filter((n) => ids.includes(n.folderId)).length;
   };
   for (const f of childrenOf(scope, null)) {
     const kids = childrenOf(scope, f.id);
@@ -344,20 +350,24 @@ function folderRow(f, count, kidCount) {
     : kidCount ? `<button class="caret" data-toggle="${f.id}" title="展開／收合">${state.prefs.collapsed[f.id] ? '▸' : '▾'}</button>`
       : '<i class="caret"></i>';
   const tag = db.defaultFolderId === f.id ? '<small class="default-tag" title="新筆記預設放在這裡">預設</small>' : '';
-  a.innerHTML = `${caret}<svg><use href="#i-folder"/></svg><span class="name"></span>${tag}<em>${count}</em>`;
+  a.innerHTML = `${caret}<svg><use href="${f.kind === 'files' ? '#i-files' : '#i-folder'}"/></svg><span class="name"></span>${tag}<em>${count}</em>`;
+  if (f.kind === 'files') a.classList.add('files-folder');
   a.querySelector('.name').textContent = f.name;
   a.title = f.name;
   return a;
 }
 
-async function newFolder(scope = 'db', parentId = null) {
+async function newFolder(scope = 'db', parentId = null, kind = 'notes') {
+  if (parentId) kind = kindOf(findFolder(parentId));
   const title = parentId ? `在「${findFolder(parentId).name}」裡新增子資料夾`
-    : scope === 'vault' ? '新增上鎖資料夾' : '新增資料夾';
+    : scope === 'vault' ? '新增上鎖資料夾' : kind === 'files' ? '新增檔案資料夾' : '新增筆記資料夾';
   const name = await openModal({ title, input: '', okText: '建立' });
   if (!name) return null;
   const f = { id: uid(), name, createdAt: Date.now(), parentId, order: childrenOf(scope, parentId).length };
+  if (kind === 'files') f.kind = 'files';
   foldersOf(scope).push(f);
   if (parentId && state.prefs.collapsed[parentId]) { delete state.prefs.collapsed[parentId]; savePrefs(); }
+  if (kind === 'files') await applyFileChanges(fileLayout());
   persist();
   renderSidebar();
   return f;
@@ -367,7 +377,9 @@ async function renameFolder(id) {
   const f = findFolder(id);
   const name = await openModal({ title: '重新命名資料夾', input: f.name });
   if (!name) return;
+  const before = fileLayout();
   f.name = name;
+  if (f.kind === 'files') await applyFileChanges(before);
   persist();
   render();
 }
@@ -376,6 +388,25 @@ async function deleteFolder(id) {
   const scope = folderScope(id);
   const f = findFolder(id);
   const ids = folderAndChildrenIds(id);
+  if (f.kind === 'files') {
+    const inside = db.files.filter((x) => ids.includes(x.folderId) && !x.deletedAt);
+    const ok = await openModal({
+      title: `刪除檔案資料夾「${f.name}」${ids.length > 1 ? `（含 ${ids.length - 1} 個子資料夾）` : ''}？`,
+      text: inside.length ? `裡面的 ${inside.length} 個檔案會移到垃圾筒，30 天內可還原。` : '資料夾是空的。',
+      okText: '刪除', danger: true,
+    });
+    if (!ok) return;
+    const before = fileLayout();
+    const now = Date.now();
+    for (const x of inside) x.deletedAt = now;
+    db.folders = db.folders.filter((x) => !ids.includes(x.id));
+    if (ids.includes(state.view)) state.view = 'all';
+    normalizeOrders('db', f.parentId || null);
+    await applyFileChanges(before);
+    await persist(true);
+    render();
+    return;
+  }
   const inside = notesOf(scope).filter((n) => ids.includes(n.folderId) && !n.deletedAt);
   const subs = ids.length - 1;
   const what = subs ? `（含 ${subs} 個子資料夾）` : '';
@@ -414,7 +445,7 @@ async function mergeFolder(id) {
   const scope = folderScope(id);
   const f = findFolder(id);
   const ids = folderAndChildrenIds(id);
-  const targets = folderOptions(scope, false).filter((o) => !ids.includes(o.value));
+  const targets = folderOptions(scope, false, kindOf(f)).filter((o) => !ids.includes(o.value));
   if (!targets.length) { toast('沒有其他資料夾可以合併'); return; }
   const target = await openModal({
     title: `把「${f.name}」合併到…`,
@@ -424,13 +455,15 @@ async function mergeFolder(id) {
   if (!target) return;
   const t = findFolder(target);
   const removed = [id];
+  const before = fileLayout();
+  const items = f.kind === 'files' ? db.files : notesOf(scope);
   if (!t.parentId) {
     // Target is top-level: subfolders keep existing, now under the target.
     for (const k of foldersOf(scope).filter((x) => x.parentId === id)) { k.parentId = t.id; k.order = 1e6 + (k.order || 0); }
-    for (const n of notesOf(scope)) if (n.folderId === id) n.folderId = t.id;
+    for (const n of items) if (n.folderId === id) n.folderId = t.id;
   } else {
     // Target is a subfolder: everything (including subfolders' notes) goes into it.
-    for (const n of notesOf(scope)) if (ids.includes(n.folderId)) n.folderId = t.id;
+    for (const n of items) if (ids.includes(n.folderId)) n.folderId = t.id;
     removed.push(...ids.slice(1));
   }
   setFolders(scope, foldersOf(scope).filter((x) => !removed.includes(x.id)));
@@ -438,15 +471,17 @@ async function mergeFolder(id) {
   normalizeOrders(scope, f.parentId || null);
   if (removed.includes(db.defaultFolderId)) db.defaultFolderId = t.id;
   if (removed.includes(state.view)) state.view = t.id;
+  if (f.kind === 'files') await applyFileChanges(before);
   await persist(true);
   render();
   toast(`已合併到「${t.name}」`);
 }
 
 // Move folder `id` under `parentId` (null = top level), before sibling `beforeId` (null = last).
-function placeFolder(id, parentId, beforeId) {
+async function placeFolder(id, parentId, beforeId) {
   const scope = folderScope(id);
   const f = findFolder(id);
+  const before = fileLayout();
   const oldParent = f.parentId || null;
   f.parentId = parentId;
   const sibs = childrenOf(scope, parentId).filter((x) => x.id !== id);
@@ -455,6 +490,7 @@ function placeFolder(id, parentId, beforeId) {
   sibs.forEach((x, i) => { x.order = i; });
   if (oldParent !== parentId) normalizeOrders(scope, oldParent);
   if (parentId && state.prefs.collapsed[parentId]) { delete state.prefs.collapsed[parentId]; savePrefs(); }
+  if (f.kind === 'files') await applyFileChanges(before);
   persist();
   renderSidebar();
 }
@@ -467,7 +503,10 @@ function folderContextMenu(e, id) {
   items.push({ label: '重新命名', action: () => renameFolder(id) });
   items.push({ label: '合併到其他資料夾…', action: () => mergeFolder(id) });
   if (f.parentId) items.push({ label: '移到最外層', action: () => placeFolder(id, null, null) });
-  if (scope === 'db') {
+  if (f.kind === 'files') {
+    items.push({ label: '加入檔案…', action: async () => addFiles(id, await api.files.pick()) });
+    if (!api.files.inApp) items.push({ label: '在檔案總管中開啟', action: () => api.files.openFolder(db.folders, id) });
+  } else if (scope === 'db') {
     items.push({
       label: db.defaultFolderId === id ? '取消「新筆記預設資料夾」' : '設為新筆記預設資料夾',
       action: () => {
@@ -485,9 +524,251 @@ function folderContextMenu(e, id) {
   showContextMenu(e.clientX, e.clientY, items);
 }
 
+// ---------------------------------------------------------------- file folders
+//
+// db.files: [{ id, name, folderId, size, mtime, hash, createdAt, deletedAt, rev }]
+// The computer keeps them as real files in real folders (src/files-store.js),
+// the phone stores them by id (src/mobile/platform.js). After any change to the
+// records, applyFileChanges() makes the disk match.
+
+const fileLayout = () => JSON.parse(JSON.stringify({ folders: db.folders, files: db.files }));
+async function applyFileChanges(before, preserve = []) {
+  const { renamed } = await api.files.materialize(before, fileLayout(), preserve);
+  for (const [id, name] of Object.entries(renamed || {})) {
+    const f = db.files.find((x) => x.id === id);
+    if (f) f.name = name;
+  }
+}
+
+const EXT_KIND = {
+  image: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'heic'],
+  audio: ['mp3', 'm4a', 'aac', 'wav', 'ogg', 'flac', 'opus'],
+  video: ['mp4', 'm4v', 'webm', 'mov', '3gp', 'mkv'],
+  text: ['txt', 'md', 'csv', 'log', 'json', 'xml', 'ini'],
+};
+function fileKind(name) {
+  const ext = name.split('.').pop().toLowerCase();
+  return Object.keys(EXT_KIND).find((k) => EXT_KIND[k].includes(ext)) || 'other';
+}
+function fileIcon(name) {
+  const ext = name.split('.').pop().toLowerCase();
+  const kind = fileKind(name);
+  if (kind !== 'other') return { image: '🖼️', audio: '🎵', video: '🎬', text: '📝' }[kind];
+  if (ext === 'pdf') return '📕';
+  if (['doc', 'docx', 'odt', 'rtf'].includes(ext)) return '📘';
+  if (['xls', 'xlsx', 'ods'].includes(ext)) return '📗';
+  if (['ppt', 'pptx', 'odp'].includes(ext)) return '📙';
+  if (['zip', 'rar', '7z', 'gz'].includes(ext)) return '📦';
+  return '📄';
+}
+function formatSize(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// Pick up files added, changed or deleted directly in File Explorer (computer only).
+let scanning = false;
+async function refreshFiles() {
+  if (!api.files || api.files.inApp || scanning) return false;
+  scanning = true;
+  try {
+    const r = await api.files.scan(db.folders, db.files);
+    if (!r.newFolders.length && !r.missingFolderIds.length && !r.newFiles.length && !r.changedFiles.length && !r.missingFileIds.length) return false;
+    const relOf = (dir) => dir.replace(/\\/g, '/').split('/files/').pop();
+    const dirToId = new Map();
+    for (const f of db.folders.filter((x) => x.kind === 'files')) {
+      const parent = findFolder(f.parentId);
+      dirToId.set(parent ? `${parent.name}/${f.name}` : f.name, f.id);
+    }
+    for (const nf of r.newFolders.sort((a, b) => (a.parentDir ? 1 : 0) - (b.parentDir ? 1 : 0))) {
+      const parentId = nf.parentDir ? dirToId.get(relOf(nf.parentDir)) || null : null;
+      const f = { id: uid(), name: nf.name, kind: 'files', createdAt: Date.now(), parentId, order: childrenOf('db', parentId).length };
+      db.folders.push(f);
+      dirToId.set(relOf(nf.dir), f.id);
+    }
+    const now = Date.now();
+    for (const nf of r.newFiles) {
+      const folderId = dirToId.get(relOf(nf.dir));
+      if (folderId) db.files.push({ id: uid(), name: nf.name, folderId, size: nf.size, mtime: nf.mtime, hash: nf.hash, createdAt: now, deletedAt: null });
+    }
+    for (const c of r.changedFiles) Object.assign(db.files.find((f) => f.id === c.id) || {}, { size: c.size, mtime: c.mtime, hash: c.hash });
+    db.files = db.files.filter((f) => !r.missingFileIds.includes(f.id));
+    db.folders = db.folders.filter((f) => !r.missingFolderIds.includes(f.id));
+    if (r.missingFolderIds.includes(state.view)) state.view = 'all';
+    await persist(true);
+    render();
+    return true;
+  } finally {
+    scanning = false;
+  }
+}
+
+async function addFiles(folderId, sources) {
+  if (!sources.length) return;
+  syncOverlay.show('加入檔案中…');
+  try {
+    const { added, skipped } = await api.files.add(db.folders, folderId, sources);
+    db.files.push(...added);
+    await persist(true);
+    render();
+    if (skipped.length) openModal({ title: '有檔案太大', text: `單一檔案上限 200 MB，以下檔案沒有加入：\n${skipped.join('\n')}`, okText: '好' });
+    else toast(`已加入 ${added.length} 個檔案`);
+  } finally {
+    syncOverlay.hide();
+  }
+}
+
+async function trashFiles(ids) {
+  const before = fileLayout();
+  const now = Date.now();
+  for (const f of db.files) if (ids.includes(f.id)) f.deletedAt = now;
+  await applyFileChanges(before);
+  await persist(true);
+  toast(`已移到垃圾筒（${ids.length} 個檔案）`);
+}
+
+async function restoreFiles(ids) {
+  const before = fileLayout();
+  for (const f of db.files) {
+    if (!ids.includes(f.id)) continue;
+    if (!isFileFolder(f.folderId)) {
+      // Its folder is gone: restore into a 還原的檔案 folder.
+      let target = db.folders.find((x) => x.kind === 'files' && x.name === '還原的檔案' && !x.parentId);
+      if (!target) {
+        target = { id: uid(), name: '還原的檔案', kind: 'files', createdAt: Date.now(), parentId: null, order: childrenOf('db', null).length };
+        db.folders.push(target);
+      }
+      f.folderId = target.id;
+    }
+    f.deletedAt = null;
+  }
+  await applyFileChanges(before);
+  await persist(true);
+}
+
+async function destroyFiles(ids) {
+  const before = fileLayout();
+  db.files = db.files.filter((f) => !ids.includes(f.id));
+  await applyFileChanges(before);
+  await persist(true);
+}
+
+async function renameFile(id) {
+  const f = db.files.find((x) => x.id === id);
+  const name = await openModal({ title: '重新命名', input: f.name, okText: '確定' });
+  if (!name || name === f.name) return;
+  if (/[\\/:*?"<>|]/.test(name)) { toast('檔名不能包含 \\ / : * ? " < > |'); return; }
+  const before = fileLayout();
+  f.name = name;
+  await applyFileChanges(before);
+  await persist(true);
+  render();
+}
+
+async function moveFiles(ids) {
+  const opts = folderOptions('db', false, 'files');
+  const target = await openModal({ title: '移動到檔案資料夾', options: opts, okText: '移動' });
+  if (!target) return false;
+  const before = fileLayout();
+  for (const f of db.files) if (ids.includes(f.id)) f.folderId = target;
+  await applyFileChanges(before);
+  await persist(true);
+  return true;
+}
+
+async function openFile(f) {
+  if (!api.files.inApp) { api.files.open(db.folders, f); return; }
+  const kind = fileKind(f.name);
+  if (kind === 'other') { shareFile(f); return; } // pdf, Word…: pick an app that can open it
+  const url = await api.files.previewUrl(db.folders, f);
+  const body = $('#fp-body');
+  body.innerHTML = '';
+  $('#fp-name').textContent = f.name;
+  if (kind === 'image') body.innerHTML = `<img src="${escapeHtml(url)}" alt="">`;
+  else if (kind === 'audio') body.innerHTML = `<audio controls autoplay src="${escapeHtml(url)}"></audio>`;
+  else if (kind === 'video') body.innerHTML = `<video controls autoplay playsinline src="${escapeHtml(url)}"></video>`;
+  else if (kind === 'text') {
+    const pre = document.createElement('pre');
+    pre.textContent = f.size > 2 * 1024 * 1024 ? '檔案太大，無法在手機上預覽' : await (await fetch(url)).text();
+    body.appendChild(pre);
+  }
+  $('#fp-share').onclick = () => shareFile(f);
+  $('#file-preview').classList.remove('hidden');
+}
+async function shareFile(f) {
+  try {
+    await api.files.share(db.folders, f);
+  } catch (err) {
+    openModal({ title: '無法分享', text: err.message || String(err), okText: '好' });
+  }
+}
+function closeFilePreview() {
+  $('#fp-body').innerHTML = ''; // stops audio/video
+  $('#file-preview').classList.add('hidden');
+}
+$('#fp-close').addEventListener('click', closeFilePreview);
+
+function fileContextMenu(e, id) {
+  const f = db.files.find((x) => x.id === id);
+  const items = f.deletedAt
+    ? [
+      { label: '還原', action: async () => { await restoreFiles([id]); render(); } },
+      { label: '永久刪除', danger: true, action: async () => {
+        if (await openModal({ title: `永久刪除「${f.name}」？`, text: '此動作無法復原。', okText: '永久刪除', danger: true })) { await destroyFiles([id]); render(); }
+      } },
+    ]
+    : [
+      { label: '開啟', action: () => openFile(f) },
+      ...(api.files.inApp
+        ? [{ label: '分享…', action: () => shareFile(f) }]
+        : [{ label: '在檔案總管中顯示', action: () => api.files.show(db.folders, f) }]),
+      { label: '重新命名', action: () => renameFile(id) },
+      { label: '移動到…', action: async () => { if (await moveFiles([id])) render(); } },
+      { label: '刪除', danger: true, action: async () => { await trashFiles([id]); render(); } },
+    ];
+  showContextMenu(e.clientX, e.clientY, items);
+}
+
+function visibleFiles() {
+  const q = state.search.toLowerCase();
+  let files;
+  if (state.view === 'trash') files = (db.files || []).filter((f) => f.deletedAt);
+  else if (isFileFolder(state.view)) {
+    const ids = folderAndChildrenIds(state.view);
+    files = (db.files || []).filter((f) => !f.deletedAt && ids.includes(f.folderId));
+  } else return [];
+  if (q) files = files.filter((f) => f.name.toLowerCase().includes(q));
+  const { sort, dir } = state.prefs;
+  const mul = dir === 'asc' ? 1 : -1;
+  return files.sort((a, b) => {
+    if (sort === 'title') return a.name.localeCompare(b.name, 'zh-Hant') * mul;
+    if (sort === 'createdAt') return (a.createdAt - b.createdAt) * mul;
+    return ((a.mtime || a.createdAt) - (b.mtime || b.createdAt)) * mul;
+  });
+}
+
+function fileRow(f) {
+  const row = document.createElement('div');
+  row.className = 'file-row' + (state.selected.has(f.id) ? ' selected' : '');
+  row.dataset.fileId = f.id;
+  row.draggable = !IS_MOBILE && !f.deletedAt;
+  const sub = f.folderId !== state.view && findFolder(f.folderId);
+  const when = f.deletedAt
+    ? `${Math.max(0, TRASH_DAYS - Math.floor((Date.now() - f.deletedAt) / 86400000))} 天後永久刪除`
+    : formatDate(f.mtime || f.createdAt);
+  row.innerHTML = `<span class="check"></span><span class="ficon">${fileIcon(f.name)}</span>
+    <div class="fname"><b></b><small></small></div><span class="fsize">${formatSize(f.size)}</span><span class="fdate"></span>`;
+  row.querySelector('b').textContent = f.name;
+  row.querySelector('small').textContent = sub ? sub.name : '';
+  row.querySelector('.fdate').textContent = when;
+  return row;
+}
+
 // ---------------------------------------------------------------- list
 
 function visibleNotes() {
+  if (isFileFolder(state.view)) return [];
   const inFolder = findFolder(state.view) ? folderAndChildrenIds(state.view) : null;
   if (inVaultView()) {
     let notes = vault.unlocked ? vault.notes : [];
@@ -550,13 +831,17 @@ function renderList() {
   const inTrash = state.view === 'trash';
   const inVault = inVaultView();
   const gate = inVault && !vault.unlocked;
+  const inFiles = isFileFolder(state.view);
   $('#view-title').textContent = viewTitle();
+  $('#btn-add-files').classList.toggle('hidden', !inFiles);
+  $('#btn-open-dir').classList.toggle('hidden', !inFiles || !!api.files?.inApp);
+  $('#color-filter').classList.toggle('hidden', inFiles);
   $('#btn-empty-trash').classList.toggle('hidden', !inTrash || state.selecting);
-  $('#btn-new-note').classList.toggle('hidden', inTrash || gate);
-  $('#btn-new-image-note').classList.toggle('hidden', inTrash || gate);
-  $('#btn-new-voice-note').classList.toggle('hidden', inTrash || gate);
+  $('#btn-new-note').classList.toggle('hidden', inTrash || gate || inFiles);
+  $('#btn-new-image-note').classList.toggle('hidden', inTrash || gate || inFiles);
+  $('#btn-new-voice-note').classList.toggle('hidden', inTrash || gate || inFiles);
   $('#btn-select-mode').classList.toggle('hidden', gate);
-  $('#btn-view-mode').classList.toggle('hidden', gate);
+  $('#btn-view-mode').classList.toggle('hidden', gate || inFiles);
   $('#btn-vault-lock').classList.toggle('hidden', !inVault || gate);
   $('#btn-vault-password').classList.toggle('hidden', !inVault || gate);
   $('.search').classList.toggle('hidden', gate);
@@ -567,13 +852,13 @@ function renderList() {
   $('#select-actions').classList.toggle('hidden', !state.selecting);
   $('.topbar').classList.toggle('selecting', state.selecting);
   $('#btn-sel-restore').classList.toggle('hidden', !inTrash);
-  $('#btn-sel-color').classList.toggle('hidden', inTrash);
+  $('#btn-sel-color').classList.toggle('hidden', inTrash || inFiles);
   $$('#color-filter button').forEach((b) => b.classList.toggle('on', b.dataset.cf === (state.colorFilter || '')));
   $('#btn-sel-move').classList.toggle('hidden', inTrash);
-  $('#btn-sel-vault').classList.toggle('hidden', inTrash || inVault);
+  $('#btn-sel-vault').classList.toggle('hidden', inTrash || inVault || inFiles);
   $('#btn-sel-unvault').classList.toggle('hidden', !inVault);
   $('#btn-sel-delete').lastChild.textContent = inTrash || inVault ? '永久刪除' : '刪除';
-  $('#select-count').textContent = `已選取 ${state.selected.size} 則`;
+  $('#select-count').textContent = `已選取 ${state.selected.size} ${inFiles ? '個' : '則'}`;
   $$('#select-actions .text-btn:not(#btn-select-all):not(#btn-select-done)')
     .forEach((b) => { b.disabled = state.selected.size === 0; });
 
@@ -582,9 +867,19 @@ function renderList() {
   $('#btn-view-mode use').setAttribute('href', { grid: '#i-grid', list: '#i-list', table: '#i-table' }[state.prefs.layout] || '#i-grid');
 
   const container = $('#notes');
-  container.className = state.prefs.layout + (gate ? ' hidden' : '');
+  container.className = (inFiles ? 'files' : state.prefs.layout) + (gate ? ' hidden' : '');
   container.classList.toggle('selecting', state.selecting);
   container.innerHTML = '';
+
+  if (inFiles) {
+    const files = visibleFiles();
+    for (const f of files) container.appendChild(fileRow(f));
+    const empty = $('#empty');
+    empty.classList.toggle('hidden', files.length > 0);
+    empty.innerHTML = state.search ? '找不到符合的檔案'
+      : `這個資料夾是空的<br><small>按「加入檔案」${api.files.inApp ? '' : '，或直接把檔案拖進來'}</small>`;
+    return;
+  }
 
   const notes = visibleNotes();
   if (state.prefs.layout === 'table' && notes.length) {
@@ -624,9 +919,18 @@ function renderList() {
     if (img) hydrateImages(card);
   }
 
+  const trashFilesList = inTrash ? visibleFiles() : [];
+  if (trashFilesList.length) {
+    const box = document.createElement('div');
+    box.className = 'trash-files';
+    box.innerHTML = '<div class="section-head">檔案</div>';
+    for (const f of trashFilesList) box.appendChild(fileRow(f));
+    container.appendChild(box);
+  }
+
   const empty = $('#empty');
-  empty.classList.toggle('hidden', notes.length > 0 || gate);
-  if (!notes.length) {
+  empty.classList.toggle('hidden', notes.length + trashFilesList.length > 0 || gate);
+  if (!notes.length && !trashFilesList.length) {
     empty.innerHTML = state.search ? '找不到符合的筆記'
       : state.colorFilter ? '沒有這個顏色的筆記<br><small>按「全部」可顯示所有筆記</small>'
       : inVault ? '上鎖筆記是空的<br><small>在這裡建立的筆記會加密保存，也可以在其他筆記按右鍵「移到上鎖筆記」</small>'
@@ -647,6 +951,7 @@ function setView(view) {
   state.selected.clear();
   render();
   if (view === 'vault' && !vault.unlocked) setTimeout(() => $('#vault-pw').focus(), 0);
+  if (isFileFolder(view)) refreshFiles();
 }
 
 // ---------------------------------------------------------------- locked notes
@@ -864,7 +1169,7 @@ function createNote(html = '') {
   const toVault = inVaultView() && vault.unlocked;
   if (inVaultView() && !vault.unlocked) state.view = 'all';
   let folderId = null;
-  if (findFolder(state.view)) folderId = state.view; // current folder (normal or locked)
+  if (findFolder(state.view) && !isFileFolder(state.view)) folderId = state.view; // current folder (normal or locked)
   else if (!toVault && state.view !== 'uncategorized' && db.folders.some((f) => f.id === db.defaultFolderId)) {
     folderId = db.defaultFolderId;
   }
@@ -1012,6 +1317,8 @@ function closeEditor() {
   }
   persist(true);
   state.currentId = null;
+  editor.blur(); // a hidden editor must not keep the keyboard focus
+  $('#note-title').blur();
   hideImageBar();
   closePalette();
   $('#editor-view').classList.add('hidden');
@@ -1521,6 +1828,27 @@ $('#btn-delete-note').addEventListener('click', async () => {
 
 let lastClickedId = null;
 $('#notes').addEventListener('click', (e) => {
+  const row = e.target.closest('.file-row');
+  if (row) {
+    const id = row.dataset.fileId;
+    const f = db.files.find((x) => x.id === id);
+    if (state.selecting || e.ctrlKey || e.shiftKey) {
+      state.selecting = true;
+      const order = visibleFiles().map((x) => x.id);
+      if (e.shiftKey && lastClickedId && order.includes(lastClickedId)) {
+        const [a, b] = [order.indexOf(lastClickedId), order.indexOf(id)].sort((x, y) => x - y);
+        for (const x of order.slice(a, b + 1)) state.selected.add(x);
+      } else if (state.selected.has(id)) state.selected.delete(id);
+      else state.selected.add(id);
+      lastClickedId = id;
+      renderList();
+    } else if (f.deletedAt) {
+      fileContextMenu(e, id);
+    } else {
+      openFile(f);
+    }
+    return;
+  }
   const card = e.target.closest('.note-card');
   if (!card) return;
   const id = card.dataset.id;
@@ -1543,6 +1871,8 @@ $('#notes').addEventListener('click', (e) => {
   }
 });
 $('#notes').addEventListener('contextmenu', (e) => {
+  const row = e.target.closest('.file-row');
+  if (row) { e.preventDefault(); fileContextMenu(e, row.dataset.fileId); return; }
   const card = e.target.closest('.note-card');
   if (!card) return;
   e.preventDefault();
@@ -1551,12 +1881,35 @@ $('#notes').addEventListener('contextmenu', (e) => {
 
 // drag notes onto folders / trash in the sidebar
 $('#notes').addEventListener('dragstart', (e) => {
+  const row = e.target.closest('.file-row');
+  if (row) {
+    const ids = state.selected.has(row.dataset.fileId) ? [...state.selected] : [row.dataset.fileId];
+    e.dataTransfer.setData('application/x-file-ids', JSON.stringify(ids));
+    e.dataTransfer.effectAllowed = 'move';
+    return;
+  }
   const card = e.target.closest('.note-card');
   if (!card) return;
   const ids = state.selected.has(card.dataset.id) ? [...state.selected] : [card.dataset.id];
   e.dataTransfer.setData('application/x-note-ids', JSON.stringify(ids));
   e.dataTransfer.effectAllowed = 'move';
 });
+// Files dragged in from File Explorer → add to the open file folder (computer).
+const scrollerList = $('#notes');
+scrollerList.addEventListener('dragover', (e) => {
+  if (isFileFolder(state.view) && [...e.dataTransfer.types].includes('Files') && api.files.pathOf) {
+    e.preventDefault();
+    scrollerList.classList.add('dragover');
+  }
+});
+scrollerList.addEventListener('dragleave', () => scrollerList.classList.remove('dragover'));
+scrollerList.addEventListener('drop', (e) => {
+  scrollerList.classList.remove('dragover');
+  if (!isFileFolder(state.view) || !e.dataTransfer.files.length || !api.files.pathOf) return;
+  e.preventDefault();
+  addFiles(state.view, [...e.dataTransfer.files].map((f) => api.files.pathOf(f)).filter(Boolean));
+});
+
 // Sidebar drag & drop:
 //  - notes onto 所有筆記/未分類/a folder/上鎖筆記/a locked folder/垃圾筒
 //  - folders: between two folders = reorder; onto a top-level folder = become
@@ -1576,6 +1929,7 @@ function folderDrop(e, target) {
   }
   const v = target.dataset.view;
   if (v === 'vault') {
+    if (src.kind === 'files') return null;
     return scope === 'db'
       ? { mark: 'drop-target', run: () => moveFolderToVault(src.id) }
       : { mark: 'drop-target', run: () => placeFolder(src.id, null, null) };
@@ -1585,17 +1939,18 @@ function folderDrop(e, target) {
   const r = target.getBoundingClientRect();
   const pos = (e.clientY - r.top) / r.height;
   if (pos > 0.28 && pos < 0.72 && !t.parentId) {
-    if (srcHasKids || t.id === src.parentId) return null; // max two levels / already there
+    if (srcHasKids || t.id === src.parentId || kindOf(t) !== kindOf(src)) return null; // two levels, same kind
     return { mark: 'drop-target', run: () => placeFolder(src.id, t.id, null) };
   }
   const parent = t.parentId || null;
-  if (parent && srcHasKids) return null;
+  if (parent && (srcHasKids || kindOf(findFolder(parent)) !== kindOf(src))) return null;
   const sibs = childrenOf(scope, parent).filter((x) => x.id !== src.id);
   const before = pos <= 0.5 ? t.id : (sibs[sibs.findIndex((x) => x.id === t.id) + 1]?.id || null);
   return { mark: pos <= 0.5 ? 'drop-before' : 'drop-after', run: () => placeFolder(src.id, parent, before) };
 }
 
 async function dropNotes(ids, v) {
+  if (isFileFolder(v)) { toast('筆記不能放進檔案資料夾'); return; }
   const fromVault = vault.notes.some((n) => ids.includes(n.id));
   const toVault = v === 'vault' || folderScope(v) === 'vault';
   if (fromVault) {
@@ -1636,7 +1991,12 @@ $('#sidebar').addEventListener('dragover', (e) => {
     target.classList.add(act.mark);
   } else if (types.includes('application/x-note-ids')) {
     const v = target.dataset.view;
-    if (!v || v === 'starred') return;
+    if (!v || v === 'starred' || isFileFolder(v)) return;
+    e.preventDefault();
+    target.classList.add('drop-target');
+  } else if (types.includes('application/x-file-ids') || (types.includes('Files') && api.files.pathOf)) {
+    const v = target.dataset.view;
+    if (!isFileFolder(v) && !(v === 'trash' && types.includes('application/x-file-ids'))) return;
     e.preventDefault();
     target.classList.add('drop-target');
   }
@@ -1656,10 +2016,34 @@ $('#sidebar').addEventListener('drop', (e) => {
     return;
   }
   clearDropMarks();
+  const v = target && target.dataset.view;
+  const fileIds = e.dataTransfer.getData('application/x-file-ids');
+  if (fileIds && v) {
+    e.preventDefault();
+    const ids = JSON.parse(fileIds);
+    (async () => {
+      if (v === 'trash') await trashFiles(ids);
+      else if (isFileFolder(v)) {
+        const before = fileLayout();
+        for (const f of db.files) if (ids.includes(f.id)) f.folderId = v;
+        await applyFileChanges(before);
+        await persist(true);
+        toast(`已移動 ${ids.length} 個檔案`);
+      }
+      state.selected.clear();
+      render();
+    })();
+    return;
+  }
+  if (isFileFolder(v) && e.dataTransfer.files.length && api.files.pathOf) {
+    e.preventDefault();
+    addFiles(v, [...e.dataTransfer.files].map((f) => api.files.pathOf(f)).filter(Boolean));
+    return;
+  }
   const raw = e.dataTransfer.getData('application/x-note-ids');
-  if (!target || !raw || !target.dataset.view) return;
+  if (!target || !raw || !v) return;
   e.preventDefault();
-  dropNotes(JSON.parse(raw), target.dataset.view);
+  dropNotes(JSON.parse(raw), v);
 });
 
 $('#sidebar').addEventListener('click', (e) => {
@@ -1679,6 +2063,16 @@ $('#sidebar').addEventListener('click', (e) => {
   }
   const item = e.target.closest('.nav-item');
   if (item) {
+    // Double-click a folder to rename it. Detected here because the first click
+    // re-renders the sidebar, so the browser's dblclick never fires.
+    const now = Date.now();
+    if (item.dataset.folder && lastFolderClick.id === item.dataset.folder && now - lastFolderClick.at < 400) {
+      lastFolderClick.id = null;
+      renameFolder(item.dataset.folder);
+      return;
+    }
+    lastFolderClick.id = item.dataset.folder || null;
+    lastFolderClick.at = now;
     setView(item.dataset.view);
     closeDrawer();
   }
@@ -1701,14 +2095,17 @@ $('#sidebar').addEventListener('contextmenu', (e) => {
   }
   if (e.target.closest('.nav-section, #folder-list') || e.target.tagName === 'NAV') {
     e.preventDefault();
-    showContextMenu(e.clientX, e.clientY, [{ label: '新增資料夾', action: () => newFolder('db') }]);
+    newFolderMenu(e);
   }
 });
-$('#sidebar').addEventListener('dblclick', (e) => {
-  const row = e.target.closest('.folder-item');
-  if (row && !e.target.closest('[data-toggle]')) renameFolder(row.dataset.folder);
-});
-$('#btn-new-folder').addEventListener('click', (e) => { e.stopPropagation(); newFolder(); });
+const lastFolderClick = { id: null, at: 0 };
+function newFolderMenu(e) {
+  showContextMenu(e.clientX, e.clientY, [
+    { label: '📁 新增筆記資料夾', action: () => newFolder('db', null, 'notes') },
+    { label: '🗂 新增檔案資料夾', action: () => newFolder('db', null, 'files') },
+  ]);
+}
+$('#btn-new-folder').addEventListener('click', (e) => { e.stopPropagation(); newFolderMenu(e); });
 $('#btn-toggle-sidebar').addEventListener('click', () => {
   state.prefs.sidebar = !state.prefs.sidebar;
   savePrefs();
@@ -1883,13 +2280,28 @@ $('#btn-select-mode').addEventListener('click', () => {
 });
 $('#btn-select-done').addEventListener('click', () => { state.selecting = false; state.selected.clear(); renderList(); });
 $('#btn-select-all').addEventListener('click', () => {
-  const ids = visibleNotes().map((n) => n.id);
+  const ids = [...visibleNotes(), ...visibleFiles()].map((n) => n.id);
   const all = ids.every((id) => state.selected.has(id));
   state.selected = new Set(all ? [] : ids);
   renderList();
 });
 $('#btn-sel-delete').addEventListener('click', async () => {
-  const ids = [...state.selected];
+  const all = [...state.selected];
+  const fileIds = all.filter((id) => db.files.some((f) => f.id === id));
+  const ids = all.filter((id) => !fileIds.includes(id));
+  if (fileIds.length) {
+    if (state.view === 'trash') {
+      if (!(await openModal({ title: `永久刪除 ${fileIds.length + ids.length} 項？`, text: '此動作無法復原。', okText: '永久刪除', danger: true }))) return;
+      await destroyFiles(fileIds);
+      if (ids.length) { db.notes = db.notes.filter((n) => !ids.includes(n.id)); await persist(true); api.cleanupImages(); }
+    } else {
+      await trashFiles(fileIds);
+    }
+    state.selected.clear();
+    state.selecting = false;
+    render();
+    return;
+  }
   if (state.view === 'trash') { if (!(await destroyNotes(ids))) return; }
   else if (inVaultView()) { if (!(await destroyVaultNotes(ids))) return; }
   else trashNotes(ids);
@@ -1897,14 +2309,18 @@ $('#btn-sel-delete').addEventListener('click', async () => {
   state.selecting = false;
   render();
 });
-$('#btn-sel-restore').addEventListener('click', () => {
-  restoreNotes([...state.selected]);
+$('#btn-sel-restore').addEventListener('click', async () => {
+  const fileIds = [...state.selected].filter((id) => db.files.some((f) => f.id === id));
+  if (fileIds.length) await restoreFiles(fileIds);
+  restoreNotes([...state.selected].filter((id) => !fileIds.includes(id)));
   state.selected.clear();
   state.selecting = false;
   render();
 });
 $('#btn-sel-move').addEventListener('click', async () => {
-  if (!(await moveNotes([...state.selected]))) return;
+  if (isFileFolder(state.view)) {
+    if (!(await moveFiles([...state.selected]))) return;
+  } else if (!(await moveNotes([...state.selected]))) return;
   state.selected.clear();
   state.selecting = false;
   render();
@@ -1925,8 +2341,16 @@ $('#btn-vault-lock').addEventListener('click', () => { lockVault(); toast('已�
 $('#btn-vault-password').addEventListener('click', changeVaultPassword);
 $('#btn-empty-trash').addEventListener('click', async () => {
   const ids = db.notes.filter((n) => n.deletedAt).map((n) => n.id);
-  if (ids.length && (await destroyNotes(ids))) render();
+  const fileIds = db.files.filter((f) => f.deletedAt).map((f) => f.id);
+  if (!ids.length && !fileIds.length) return;
+  if (!(await openModal({ title: `清空垃圾筒（${ids.length + fileIds.length} 項）？`, text: '此動作無法復原。', okText: '清空', danger: true }))) return;
+  db.notes = db.notes.filter((n) => !n.deletedAt);
+  await destroyFiles(fileIds);
+  api.cleanupImages();
+  render();
 });
+$('#btn-add-files').addEventListener('click', async () => addFiles(state.view, await api.files.pick()));
+$('#btn-open-dir').addEventListener('click', () => api.files.openFolder(db.folders, state.view));
 const LAYOUTS = [
   { value: 'grid', label: '卡片' },
   { value: 'list', label: '清單' },
@@ -1958,6 +2382,7 @@ document.addEventListener('keydown', (e) => {
   if (['#modal', '#import-dialog', '#sync-dialog', '#sync-overlay'].some((sel) => !$(sel).classList.contains('hidden'))) return;
   const inEditor = !!state.currentId;
   if (e.key === 'Escape') {
+    if (!$('#file-preview').classList.contains('hidden')) { closeFilePreview(); return; }
     if (!$('#color-palette').classList.contains('hidden')) { closePalette(); return; }
     if (!$('#lightbox').classList.contains('hidden')) { $('#lightbox').classList.add('hidden'); return; }
     hideContextMenu();
@@ -1986,7 +2411,8 @@ document.addEventListener('keydown', (e) => {
 
 // Ctrl+V a screenshot while browsing the list → new note containing it.
 document.addEventListener('paste', async (e) => {
-  if (state.currentId || document.activeElement.closest('input, [contenteditable]')) return;
+  const active = document.activeElement;
+  if (state.currentId || (active.closest('input, [contenteditable]') && active.offsetParent !== null)) return;
   const files = [...e.clipboardData.files].filter((f) => f.type.startsWith('image/'));
   const text = e.clipboardData.getData('text/plain');
   if (!files.length && !text) return;
@@ -2029,6 +2455,7 @@ function formatWhen(ts) {
 function adoptMerged(data) {
   db.notes = data.notes;
   db.folders = data.folders;
+  db.files = data.files || [];
   db.tombstones = data.tombstones;
   repairFolders('db');
   resetSnapshot('db');
@@ -2114,12 +2541,15 @@ function initServerSync() {
       syncOverlay.show('手機同步中，請稍候…');
       flushEditor();
       if (vault.unlocked) await lockVault();
+      await refreshFiles();
       await persist(true);
-      return { notes: db.notes, folders: db.folders, tombstones: db.tombstones };
+      return { notes: db.notes, folders: db.folders, files: db.files, tombstones: db.tombstones };
     }
     if (op === 'apply') {
       const openId = state.currentId;
+      const before = fileLayout();
       adoptMerged(payload.db);
+      await applyFileChanges(before, payload.preserve);
       if (payload.vaultChanged) vault.exists = true;
       await api.save(db);
       api.cleanupImages();
@@ -2206,7 +2636,7 @@ async function runPhoneSync() {
     const remote = await syncApi.request('state');
     connected = true;
     const lastSync = pairing.lastSync || 0;
-    const merged = SyncMerge.mergeData({ notes: db.notes, folders: db.folders, tombstones: db.tombstones }, remote.db, { lastSync });
+    const merged = SyncMerge.mergeData({ notes: db.notes, folders: db.folders, files: db.files, tombstones: db.tombstones }, remote.db, { lastSync });
     const lines = [];
 
     // plain images
@@ -2218,6 +2648,51 @@ async function runPhoneSync() {
     const up = [...need].filter((n) => mine.has(n) && !theirs.has(n));
     for (const names of chunk(down, 8)) await syncApi.writeImages((await syncApi.request('getImages', { names, vault: false })).files, false);
     for (const names of chunk(up, 8)) await syncApi.request('putImages', { files: await syncApi.readImages(names, false), vault: false });
+
+    // file folders: move contents that one side is missing, in 2 MB pieces
+    const FILE_CHUNK = 2 * 1024 * 1024;
+    const localFiles = new Map((db.files || []).map((f) => [f.id, f]));
+    const remoteFiles = new Map((remote.db.files || []).map((f) => [f.id, f]));
+    const fileDown = [];
+    const fileUp = [];
+    const preserveLocal = [];
+    const preserveRemote = [];
+    const now = Date.now();
+    for (const f of [...merged.data.files]) {
+      if (f.deletedAt) continue;
+      const l = localFiles.get(f.id);
+      const r = remoteFiles.get(f.id);
+      const localHas = l && l.hash === f.hash && await api.files.hasContent(f.id);
+      const remoteHas = r && r.hash === f.hash;
+      if (!localHas && remoteHas) fileDown.push(f);
+      else if (localHas && !remoteHas) fileUp.push(f);
+      // Both sides changed this file since the last sync: keep the older one in the trash.
+      if (l && r && l.hash !== r.hash && SyncMerge.revOf(l) > lastSync && SyncMerge.revOf(r) > lastSync) {
+        const lose = f.hash === l.hash ? r : l;
+        const copy = { ...lose, id: `${f.id}-old${now.toString(36)}`, deletedAt: now, rev: now };
+        merged.data.files.push(copy);
+        (lose === l ? preserveLocal : preserveRemote).push({ fromId: f.id, toId: copy.id });
+        merged.conflicts++;
+      }
+    }
+    await api.files.clearIncoming();
+    let fileNo = 0;
+    for (const f of [...fileDown, ...fileUp]) {
+      fileNo++;
+      const upload = fileUp.includes(f);
+      for (let off = 0; off < f.size || off === 0; off += FILE_CHUNK) {
+        const len = Math.min(FILE_CHUNK, f.size - off);
+        step(`${upload ? '傳送' : '接收'}檔案 ${fileNo}/${fileDown.length + fileUp.length}：${f.name}（${f.size ? Math.round((off / f.size) * 100) : 100}%）`);
+        const final = off + len >= f.size;
+        if (upload) {
+          await syncApi.request('putFileChunk', { id: f.id, offset: off, data: await api.files.readChunk(f.id, off, len), final });
+        } else {
+          const { data } = await syncApi.request('getFileChunk', { id: f.id, offset: off, length: len });
+          await api.files.writeIncoming(f.id, off, data, final);
+        }
+        if (final) break;
+      }
+    }
 
     // locked notes
     let vaultEnvelope = null;
@@ -2257,8 +2732,10 @@ async function runPhoneSync() {
     }
 
     step('寫入電腦…');
-    await syncApi.request('apply', { db: merged.data, vault: vaultEnvelope });
+    await syncApi.request('apply', { db: merged.data, vault: vaultEnvelope, preserve: preserveRemote });
+    const filesBefore = fileLayout();
     adoptMerged(merged.data);
+    await applyFileChanges(filesBefore, preserveLocal);
     if (vaultMerged) {
       vault.notes = vaultMerged.data.notes;
       vault.folders = vaultMerged.data.folders;
@@ -2277,14 +2754,15 @@ async function runPhoneSync() {
 
     const conflicts = merged.conflicts + (vaultMerged ? vaultMerged.conflicts : 0);
     const summary = [
-      `電腦 → 手機：${merged.toLocal + (vaultMerged ? vaultMerged.toLocal : 0)} 項更新${down.length ? `、${down.length} 張圖片` : ''}`,
-      `手機 → 電腦：${merged.toRemote + (vaultMerged ? vaultMerged.toRemote : 0)} 項更新${up.length ? `、${up.length} 張圖片` : ''}`,
+      `電腦 → 手機：${merged.toLocal + (vaultMerged ? vaultMerged.toLocal : 0)} 項更新${down.length ? `、${down.length} 張圖片` : ''}${fileDown.length ? `、${fileDown.length} 個檔案` : ''}`,
+      `手機 → 電腦：${merged.toRemote + (vaultMerged ? vaultMerged.toRemote : 0)} 項更新${up.length ? `、${up.length} 張圖片` : ''}${fileUp.length ? `、${fileUp.length} 個檔案` : ''}`,
     ];
-    if (conflicts) summary.push(`${conflicts} 則筆記兩邊都修改過：保留較新的版本，舊版已放到垃圾筒。`);
+    if (conflicts) summary.push(`${conflicts} 項兩邊都修改過：保留較新的版本，舊版已放到垃圾筒。`);
     openModal({ title: '同步完成', text: summary.concat(lines).join('\n'), okText: '好' });
   } catch (err) {
     syncApi.endSync();
     syncOverlay.hide();
+    api.files.clearIncoming();
     if (connected) { try { await syncApi.request('abort'); } catch { /* ignore */ } }
     if (['not-paired', 'bad-key'].includes(err.code)) {
       if (await pairDialog(`${err.message}`)) runPhoneSync();
@@ -2338,6 +2816,7 @@ $('#drawer-backdrop').addEventListener('click', closeDrawer);
 function handleBack() {
   const shown = (sel) => !$(sel).classList.contains('hidden');
   if (shown('#sync-overlay')) return true;
+  if (shown('#file-preview')) { closeFilePreview(); return true; }
   if (shown('#sync-dialog')) { syncDialog.close(); return true; }
   if (shown('#import-dialog')) { $('#import-cancel').click(); return true; }
   if (shown('#modal')) { $('#modal-cancel').click(); return true; }
@@ -2361,11 +2840,17 @@ if (api.onBack) api.onBack(handleBack);
   db = await api.load();
   db.folders ||= [];
   db.notes ||= [];
+  db.files ||= [];
   db.tombstones ||= {};
   repairFolders('db');
   resetSnapshot('db');
+  const filesBefore = fileLayout();
   state.prefs.collapsed ||= {};
   vault.exists = (await api.vault.status()).exists;
-  if (purgeOldTrash()) { await persist(true); api.cleanupImages(); }
+  if (purgeOldTrash()) { await applyFileChanges(filesBefore); await persist(true); api.cleanupImages(); }
   render();
+  // Files added/removed in File Explorer while DeskNotes was closed or in the background.
+  refreshFiles();
+  let focusTimer = null;
+  window.addEventListener('focus', () => { clearTimeout(focusTimer); focusTimer = setTimeout(refreshFiles, 500); });
 })();

@@ -10,6 +10,7 @@ const { execFile } = require('child_process');
 const { Vault } = require('./vault');
 const { readOutlookCsv } = require('./outlook-import');
 const { SyncServer } = require('./sync-server');
+const { FileStore } = require('./files-store');
 
 const IMG_SCHEME = 'note-img';
 const QUICK_NOTE_SHORTCUT = 'CommandOrControl+Alt+N';
@@ -23,6 +24,7 @@ let imagesDir;
 let dbFile;
 let vault;
 let syncServer;
+let fileStore;
 let mainWindow = null;
 let tray = null;
 let quitting = false;
@@ -268,6 +270,22 @@ Add-Type -Namespace W -Name K -MemberDefinition '[DllImport("user32.dll")] publi
     });
   });
 
+  // ----- file folders (see files-store.js)
+  ipcMain.handle('files:scan', (_e, folders, files) => fileStore.scan(folders, files));
+  ipcMain.handle('files:pick', async () => {
+    const res = await dialog.showOpenDialog(mainWindow, { title: '加入檔案', properties: ['openFile', 'multiSelections'] });
+    return res.canceled ? [] : res.filePaths;
+  });
+  ipcMain.handle('files:add', (_e, folders, folderId, paths) => fileStore.add(folders, folderId, paths));
+  ipcMain.handle('files:materialize', (_e, before, after, preserve) => fileStore.materialize(before, after, preserve));
+  ipcMain.handle('files:open', (_e, folders, file) => shell.openPath(fileStore.contentPath(folders, file)));
+  ipcMain.handle('files:show', (_e, folders, file) => shell.showItemInFolder(fileStore.contentPath(folders, file)));
+  ipcMain.handle('files:open-folder', (_e, folders, folderId) => {
+    const dir = folderId ? fileStore.folderDir(folders, folderId) : fileStore.root;
+    fs.mkdirSync(dir, { recursive: true });
+    return shell.openPath(dir);
+  });
+
   // ----- phone sync (see sync-server.js)
   ipcMain.handle('sync:status', () => syncServer.status());
   ipcMain.handle('sync:set-enabled', (_e, on) => { syncServer.setEnabled(on); return syncServer.status(); });
@@ -316,8 +334,10 @@ if (!app.requestSingleInstanceLock()) {
     fs.mkdirSync(imagesDir, { recursive: true });
 
     vault = new Vault(dataDir);
+    fileStore = new FileStore(dataDir);
     syncServer = new SyncServer({
       dataDir,
+      fileStore,
       imagesDir,
       vaultImagesDir: vault.imagesDir,
       vaultFile: vault.file,

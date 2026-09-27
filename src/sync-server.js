@@ -12,6 +12,7 @@
 //   state      → notes/folders/tombstones + image lists + encrypted vault file
 //   getImages  → image files (base64); vault images stay encrypted
 //   putImages  → store image files sent by the phone
+//   getFileChunk / putFileChunk → file folder contents, in pieces
 //   apply      → adopt the merged data (and vault file) computed by the phone
 
 const http = require('http');
@@ -42,7 +43,7 @@ function open(key, { iv, c }) {
 }
 
 class SyncServer {
-  // opts: { dataDir, imagesDir, vaultImagesDir, vaultFile, askRenderer(op, payload), onEvent(evt) }
+  // opts: { dataDir, fileStore, imagesDir, vaultImagesDir, vaultFile, askRenderer(op, payload), onEvent(evt) }
   constructor(opts) {
     Object.assign(this, opts);
     this.configFile = path.join(this.dataDir, 'sync.json');
@@ -186,7 +187,9 @@ class SyncServer {
         return { pcName: os.hostname() };
       case 'state': {
         this.onEvent({ type: 'sync-start', name: device.name });
+        this.fileStore.clearIncoming();
         const db = await this.askRenderer('state');
+        this.current = db; // for locating files during this sync
         let vault = null;
         if (fs.existsSync(this.vaultFile)) {
           vault = { envelope: fs.readFileSync(this.vaultFile, 'utf8'), images: list(this.vaultImagesDir) };
@@ -207,6 +210,14 @@ class SyncServer {
         for (const [n, data] of Object.entries(payload.files || {})) fs.writeFileSync(path.join(dir, safeName(n)), Buffer.from(data, 'base64'));
         return { ok: true };
       }
+      case 'getFileChunk': {
+        const rec = (this.current.files || []).find((f) => f.id === payload.id);
+        if (!rec) throw new Error('file not found');
+        return { data: b64(this.fileStore.readChunk(this.current.folders, rec, payload.offset, payload.length)) };
+      }
+      case 'putFileChunk':
+        this.fileStore.writeIncoming(safeName(payload.id), payload.offset, Buffer.from(payload.data, 'base64'), payload.final);
+        return { ok: true };
       case 'apply': {
         if (payload.vault) {
           const tmp = `${this.vaultFile}.tmp`;
@@ -214,13 +225,15 @@ class SyncServer {
           if (fs.existsSync(this.vaultFile)) fs.copyFileSync(this.vaultFile, `${this.vaultFile}.bak`);
           fs.renameSync(tmp, this.vaultFile);
         }
-        await this.askRenderer('apply', { db: payload.db, vaultChanged: !!payload.vault, stats: payload.stats });
+        await this.askRenderer('apply', { db: payload.db, vaultChanged: !!payload.vault, preserve: payload.preserve || [] });
+        this.fileStore.clearIncoming();
         device.lastSync = Date.now();
         this.saveConfig();
         this.onEvent({ type: 'sync-done', name: device.name });
         return { ok: true };
       }
       case 'abort':
+        this.fileStore.clearIncoming();
         await this.askRenderer('abort');
         return { ok: true };
       default:

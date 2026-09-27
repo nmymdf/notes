@@ -10,7 +10,9 @@
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { App } from '@capacitor/app';
+import { Share } from '@capacitor/share';
 import { scryptAsync } from '@noble/hashes/scrypt.js';
+import { sha256 } from '@noble/hashes/sha2.js';
 
 const DIR = Directory.Data;
 const ROOT = 'desknotes';
@@ -322,6 +324,114 @@ const syncApi = {
   endSync() { foreign.key = null; foreign.meta = null; },
 };
 
+// ---------- file folders (content stored by file id) ----------
+
+const FILES_DIR = `${ROOT}/files`;
+const INCOMING_DIR = `${ROOT}/.sync-incoming`;
+const MAX_FILE = 200 * 1024 * 1024;
+const CHUNK = 2 * 1024 * 1024;
+const hex = (bytes) => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+const newFileId = () => Date.now().toString(36) + hex(crypto.getRandomValues(new Uint8Array(5)));
+
+async function readChunk(path, offset, length) {
+  const { data } = await Filesystem.readFile({ path, directory: DIR, offset, length });
+  let bytes = typeof data === 'string' ? fromB64(data) : new Uint8Array(await data.arrayBuffer());
+  if (bytes.length > length) bytes = bytes.subarray(offset, offset + length); // web: offset not supported
+  return bytes;
+}
+async function appendBytes(path, bytes, first) {
+  if (first) await Filesystem.writeFile({ path, directory: DIR, data: toB64(bytes), recursive: true });
+  else await Filesystem.appendFile({ path, directory: DIR, data: toB64(bytes) });
+}
+async function moveFile(from, to) {
+  await remove(to);
+  await mkdirp(to.slice(0, to.lastIndexOf('/')));
+  await Filesystem.rename({ from, to, directory: DIR, toDirectory: DIR });
+}
+
+const filesApi = {
+  inApp: true, // open files inside the app (no File Explorer on the phone)
+  scan: async () => ({ newFolders: [], missingFolderIds: [], newFiles: [], changedFiles: [], missingFileIds: [] }),
+  pick() {
+    return new Promise((resolve) => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.multiple = true;
+      input.onchange = () => resolve([...input.files]);
+      input.oncancel = () => resolve([]);
+      input.click();
+    });
+  },
+  // sources: File objects from pick()
+  async add(_folders, folderId, sources) {
+    const added = [];
+    const skipped = [];
+    for (const file of sources) {
+      if (file.size > MAX_FILE) { skipped.push(file.name); continue; }
+      const id = newFileId();
+      const h = sha256.create();
+      for (let off = 0; off < file.size || off === 0; off += CHUNK) {
+        const bytes = new Uint8Array(await file.slice(off, off + CHUNK).arrayBuffer());
+        h.update(bytes);
+        await appendBytes(`${FILES_DIR}/${id}`, bytes, off === 0);
+        if (file.size === 0) break;
+      }
+      const now = Date.now();
+      added.push({ id, name: file.name, folderId, size: file.size, mtime: file.lastModified || now, hash: hex(h.digest()), createdAt: now, deletedAt: null });
+    }
+    return { added, skipped };
+  },
+  // Contents are stored by id, so only sync-related changes touch the disk.
+  async materialize(before, after, preserve = []) {
+    for (const p of preserve) {
+      try { await Filesystem.copy({ from: `${FILES_DIR}/${p.fromId}`, to: `${FILES_DIR}/${p.toId}`, directory: DIR, toDirectory: DIR }); } catch { /* none */ }
+    }
+    for (const f of after.files || []) {
+      if (await exists(`${INCOMING_DIR}/${f.id}`)) await moveFile(`${INCOMING_DIR}/${f.id}`, `${FILES_DIR}/${f.id}`);
+    }
+    const keep = new Set((after.files || []).map((f) => f.id));
+    for (const f of before.files || []) if (!keep.has(f.id)) await remove(`${FILES_DIR}/${f.id}`);
+    return { renamed: {} };
+  },
+  // Share to another app (LINE, e-mail, a PDF reader…). Android needs the file
+  // in the app cache with its real name; that temporary copy is removed on the
+  // next share or app start, so no second copy stays on the phone.
+  async share(_folders, file) {
+    await filesApi.clearShareCache();
+    const path = `share/${file.name}`;
+    await Filesystem.copy({ from: `${FILES_DIR}/${file.id}`, to: path, directory: DIR, toDirectory: Directory.Cache });
+    const { uri } = await Filesystem.getUri({ path, directory: Directory.Cache });
+    try {
+      await Share.share({ title: file.name, files: [uri], dialogTitle: '分享檔案' });
+    } catch (err) {
+      if (!/cancel/i.test(String(err && err.message))) throw err;
+    }
+  },
+  async clearShareCache() {
+    try { await Filesystem.rmdir({ path: 'share', directory: Directory.Cache, recursive: true }); } catch { /* none */ }
+  },
+  // A URL the WebView can play/show for in-app preview.
+  async previewUrl(_folders, file) {
+    const path = `${FILES_DIR}/${file.id}`;
+    if (NATIVE) {
+      const { uri } = await Filesystem.getUri({ path, directory: DIR });
+      return Capacitor.convertFileSrc(uri);
+    }
+    return URL.createObjectURL(new Blob([await readBytes(path)]));
+  },
+  // sync transfer
+  hasContent: (id) => exists(`${FILES_DIR}/${id}`),
+  readChunk: async (id, offset, length) => toB64(await readChunk(`${FILES_DIR}/${id}`, offset, length)),
+  async writeIncoming(id, offset, dataB64, final) {
+    const part = `${INCOMING_DIR}/${id}.part`;
+    await appendBytes(part, fromB64(dataB64), offset === 0);
+    if (final) await moveFile(part, `${INCOMING_DIR}/${id}`);
+  },
+  async clearIncoming() {
+    for (const f of await listFiles(INCOMING_DIR)) await remove(`${INCOMING_DIR}/${f}`);
+  },
+};
+
 // ---------- public API ----------
 
 const api = {
@@ -331,6 +441,8 @@ const api = {
   async load() {
     await mkdirp(IMG_DIR);
     await mkdirp(VAULT_IMG_DIR);
+    await mkdirp(FILES_DIR);
+    await mkdirp(INCOMING_DIR);
     try {
       return { version: 1, folders: [], notes: [], ...JSON.parse(await readText(DB_FILE)) };
     } catch {
@@ -465,6 +577,7 @@ const api = {
   },
 
   sync: syncApi,
+  files: filesApi,
 
   // Desktop-only features: the renderer hides their buttons on mobile.
   importOutlook: async () => null,
@@ -483,4 +596,5 @@ const api = {
 };
 
 window.notesAPI = api;
+filesApi.clearShareCache();
 document.documentElement.classList.add('mobile');

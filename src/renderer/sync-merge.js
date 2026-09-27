@@ -1,7 +1,7 @@
 // Merge rules for phone ⇄ computer sync (shared by both apps, also loadable in Node).
 //
-// Data: { notes: [], folders: [], tombstones: { id: deletedAt } }. Every note and
-// folder carries `rev`, the time of its last change of any kind (see stamp() in
+// Data: { notes: [], folders: [], files: [], tombstones: { id: deletedAt } }.
+// Every note, folder and file record carries `rev`, the time of its last change of any kind (see stamp() in
 // app.js); tombstones record items that were removed for good.
 //
 // Rules:
@@ -52,6 +52,18 @@
 
     const folders = mergeList(local.folders, remote.folders, false);
     const notes = mergeList(local.notes, remote.notes, true).concat(conflicts);
+    let files = mergeList(local.files, remote.files, false);
+
+    // The same file added on both devices (same folder, name and content) → keep one.
+    const seen = new Map();
+    files = files.filter((f) => {
+      if (f.deletedAt) return true;
+      const key = `${f.folderId}|${f.name}|${f.hash}`;
+      const other = seen.get(key);
+      if (!other) { seen.set(key, f); return true; }
+      tombstones[f.id] = now;
+      return false;
+    });
 
     // Repair references broken by the merge.
     const byId = new Map(folders.map((f) => [f.id, f]));
@@ -60,12 +72,16 @@
       if (f.parentId && (!p || p.parentId)) f.parentId = null;
     }
     for (const n of notes) if (n.folderId && !byId.has(n.folderId)) n.folderId = null;
+    // A file whose folder is gone goes to the trash (files always live in a folder).
+    for (const f of files) {
+      if (!byId.has(f.folderId) && !f.deletedAt) { f.deletedAt = now; f.rev = now; }
+    }
 
     // Forget tombstones older than a year.
     const cutoff = now - 365 * 86400000;
     for (const [id, t] of Object.entries(tombstones)) if (t < cutoff) delete tombstones[id];
 
-    const data = { notes, folders, tombstones };
+    const data = { notes, folders, files, tombstones };
     return {
       data,
       conflicts: conflicts.length,
@@ -77,7 +93,7 @@
   // How many notes/folders differ between `before` and `after` (added, changed or removed).
   function countChanges(before, after) {
     let n = 0;
-    for (const key of ['notes', 'folders']) {
+    for (const key of ['notes', 'folders', 'files']) {
       const B = new Map((before[key] || []).map((x) => [x.id, strip(x)]));
       const A = new Map((after[key] || []).map((x) => [x.id, strip(x)]));
       for (const [id, s] of A) if (B.get(id) !== s) n++;
