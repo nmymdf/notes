@@ -1,4 +1,4 @@
-# DeskNotes — Windows 桌面筆記
+# DeskNotes — Windows 桌面筆記（＋安卓手機版）
 
 一個類似 Samsung Notes 的 Windows 桌面筆記 App，不需要帳號、資料全部存在自己電腦。
 
@@ -49,6 +49,17 @@
 
 > 因為沒有程式碼簽章，第一次執行 Windows SmartScreen 可能會警告，按「其他資訊」→「仍要執行」即可。
 
+## 安卓手機版
+
+下載：<https://github.com/nmymdf/notes/releases/latest/download/DeskNotes.apk>
+
+- 用手機瀏覽器打開上面的連結下載，點下載好的檔案安裝；第一次會要求允許「安裝不明來源的應用程式」
+- 功能和電腦版相同：資料夾、上鎖筆記、顏色、搜尋、檢視模式、插入圖片
+- 左上角 ☰ 打開選單；手機的返回鍵可關閉視窗、返回列表
+- 語音輸入：用手機鍵盤上的麥克風
+- 目前**不會和電腦同步**，手機和電腦的筆記是分開的
+- 更新：下載新的 DeskNotes.apk 直接安裝即可，筆記會保留（不要先解除安裝，解除安裝會刪除手機上的筆記）
+
 ## 自己編譯
 
 需要先安裝 [Node.js](https://nodejs.org/)（LTS 版）。
@@ -57,6 +68,7 @@
 npm install
 npm start          # 直接執行
 npm run dist       # 產生 Windows 安裝檔到 dist/
+npm run android    # 產生安卓專案的網頁資源並同步到 android/（需 Android SDK 才能建置 APK）
 ```
 
 ## 資料存放位置

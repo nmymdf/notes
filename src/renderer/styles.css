@@ -143,7 +143,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .dot.none { border: 2px solid #777; background: linear-gradient(135deg, transparent 44%, #999 44% 56%, transparent 56%); }
 .color-filter { display: flex; align-items: center; gap: 4px; margin-right: auto; padding-left: 16px; }
 .color-filter > span { font-size: 14px; margin-right: 4px; }
-.color-filter button {
+.color-filter button { white-space: nowrap;
   background: none; border: 1px solid transparent; border-radius: 14px; padding: 3px 9px; cursor: pointer;
   display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 14px;
 }
@@ -358,3 +358,59 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
   .topbar.selecting .search { display: none; }
   .search { width: 180px; }
 }
+
+/* ---------- Android (html.mobile, set by src/mobile/platform.js) ---------- */
+#btn-mobile-menu, #drawer-backdrop { display: none; }
+.mobile body { -webkit-tap-highlight-color: transparent; }
+.mobile #app { padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); height: 100vh; }
+.mobile #btn-new-voice-note, .mobile #btn-voice, .mobile #btn-voice + i, .mobile #btn-on-top, .mobile #btn-export,
+.mobile #btn-import-outlook, .mobile #btn-undo-import, .mobile .sidebar-foot, .mobile #btn-toggle-sidebar { display: none !important; }
+
+/* sidebar becomes a slide-in drawer */
+.mobile #sidebar {
+  position: fixed; left: 0; top: 0; bottom: 0; width: 82vw; max-width: 320px; z-index: 85;
+  transform: translateX(-105%); transition: transform .2s ease; border-radius: 0 16px 16px 0;
+  padding: calc(env(safe-area-inset-top) + 10px) 10px calc(env(safe-area-inset-bottom) + 10px);
+  box-shadow: 8px 0 30px #000a;
+}
+.mobile.drawer-open #sidebar { transform: none; }
+.mobile #sidebar nav { margin-top: 0; }
+.mobile.drawer-open #drawer-backdrop { display: block; position: fixed; inset: 0; background: #0009; z-index: 84; }
+.mobile #btn-mobile-menu { display: inline-flex; margin-left: -6px; }
+.mobile .nav-item { padding: 12px 10px; }
+
+/* list */
+.mobile .topbar { padding: 8px 12px 4px; gap: 4px; row-gap: 8px; }
+.mobile .topbar h1 { font-size: 21px; flex: 1; min-width: 0; max-width: none; margin: 0 4px 0 0; }
+.mobile .actions { gap: 0; }
+.mobile .actions .text-btn { font-size: 0; gap: 0; padding: 8px; }
+.mobile .actions .text-btn svg { width: 22px; height: 22px; }
+.mobile #select-actions .text-btn:not(:has(svg)) { font-size: 15px; gap: 6px; padding: 8px 6px; }
+.mobile #select-count { font-size: 14px; margin-right: 2px; }
+.mobile .search { display: flex; order: 10; flex: 1 1 100%; height: 40px; width: auto; }
+.mobile .topbar.selecting .search { display: none; }
+.mobile .sortbar { padding: 2px 12px; }
+.mobile .color-filter { padding-left: 0; gap: 0; }
+.mobile .color-filter > span { display: none; }
+.mobile .sortbar .sep { margin: 0 2px; }
+.mobile #notes { padding: 8px 12px 90px; }
+.mobile #notes.grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; padding-right: 12px; }
+.mobile #notes.table .table-head, .mobile #notes.table .note-card { grid-template-columns: minmax(80px, 36%) 1fr; padding: 0 8px; }
+.mobile #notes.table.selecting .table-head, .mobile #notes.table.selecting .note-card { grid-template-columns: 18px minmax(80px, 36%) 1fr; }
+.mobile #notes.table .note-card { height: 46px; }
+.mobile .empty { margin-top: 12vh; padding: 0 24px; }
+.mobile .vault-gate { width: auto; padding: 0 28px; margin-top: 8vh; }
+
+/* editor */
+.mobile .editor-top { padding: 6px 8px 4px; gap: 2px; flex-wrap: wrap; }
+.mobile #note-title { font-size: 20px; flex: 1 1 55%; padding: 6px 4px; }
+.mobile #save-state { display: none; }
+.mobile #note-folder { max-width: 38vw; padding: 6px 6px; }
+.mobile .note-colors { margin-right: 0; }
+.mobile .toolbar { margin: 0 8px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+.mobile .toolbar::-webkit-scrollbar { display: none; }
+.mobile .toolbar button, .mobile .toolbar .color { flex: none; min-width: 40px; height: 38px; }
+.mobile .editor-scroll { padding: 8px 8px 160px; }
+.mobile #editor { padding: 4px 6px; }
+.mobile .modal-box { width: min(380px, 92vw); }
+.mobile .img-bar button { padding: 8px 10px; }

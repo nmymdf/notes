@@ -1,0 +1,8 @@
+{
+  "appId": "com.nmymdf.desknotes",
+  "appName": "DeskNotes",
+  "webDir": "www",
+  "android": {
+    "backgroundColor": "#000000"
+  }
+}

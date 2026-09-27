@@ -2,6 +2,7 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self'; img-src 'self' note-img: data: blob: https: http:; style-src 'self' 'unsafe-inline'; script-src 'self'">
   <title>DeskNotes  —  designer: ArchieKuo</title>
@@ -39,6 +40,7 @@
     <symbol id="i-move" viewBox="0 0 24 24"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M10 13h6M13 10l3 3-3 3"/></symbol>
   </svg>
 
+  <div id="drawer-backdrop"></div>
   <div id="app">
     <!-- ================= Sidebar ================= -->
     <aside id="sidebar">
@@ -65,6 +67,7 @@
     <!-- ================= List view ================= -->
     <main id="list-view">
       <header class="topbar">
+        <button class="icon-btn" id="btn-mobile-menu" title="選單"><svg><use href="#i-menu"/></svg></button>
         <h1 id="view-title">所有筆記</h1>
         <div class="actions" id="normal-actions">
           <button class="text-btn" id="btn-new-note"><svg><use href="#i-new"/></svg>建立筆記</button>

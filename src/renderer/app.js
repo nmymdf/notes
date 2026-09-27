@@ -5,6 +5,8 @@ const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
 
 const TRASH_DAYS = 30;
+// The Android build (src/mobile/platform.js) sets api.mobile.
+const IS_MOBILE = !!api.mobile;
 const PREFS_KEY = 'desknotes.prefs';
 
 let db = { version: 1, folders: [], notes: [] };
@@ -24,6 +26,29 @@ const state = {
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+// On Android the WebView can't load note-img:// URLs, so api.resolveImage turns
+// them into displayable ones. The stored URL is kept in data-src and restored
+// before the HTML is saved. On the desktop both helpers do nothing.
+function hydrateImages(root) {
+  if (!api.resolveImage) return;
+  for (const img of root.querySelectorAll('img[src^="note-img:"]')) {
+    const src = img.getAttribute('src');
+    img.dataset.src = src;
+    img.removeAttribute('src');
+    api.resolveImage(src).then((url) => { if (url && img.dataset.src === src) img.src = url; });
+  }
+}
+function dehydrateHtml(html) {
+  if (!api.resolveImage || !html.includes('data-src')) return html;
+  const tpl = document.createElement('template');
+  tpl.innerHTML = html;
+  for (const img of tpl.content.querySelectorAll('img[data-src]')) {
+    img.setAttribute('src', img.dataset.src);
+    img.removeAttribute('data-src');
+  }
+  return tpl.innerHTML;
+}
 
 function formatDate(ts) {
   const d = new Date(ts);
@@ -253,7 +278,7 @@ function renderSidebar() {
   else $('#vault-folder-list').innerHTML = '';
 
   $$('#sidebar .nav-item').forEach((a) => a.classList.toggle('active', a.dataset.view === state.view));
-  $('#sidebar').classList.toggle('collapsed', !state.prefs.sidebar);
+  $('#sidebar').classList.toggle('collapsed', !state.prefs.sidebar && !IS_MOBILE);
 }
 
 function renderFolderTree(list, scope, notes) {
@@ -276,7 +301,7 @@ function folderRow(f, count, kidCount) {
   a.className = 'nav-item folder-item' + (f.parentId ? ' sub' : '');
   a.dataset.view = f.id;
   a.dataset.folder = f.id;
-  a.draggable = true;
+  a.draggable = !IS_MOBILE;
   const caret = f.parentId ? ''
     : kidCount ? `<button class="caret" data-toggle="${f.id}" title="展開／收合">${state.prefs.collapsed[f.id] ? '▸' : '▾'}</button>`
       : '<i class="caret"></i>';
@@ -531,7 +556,7 @@ function renderList() {
     const card = document.createElement('div');
     card.className = 'note-card' + (n.color ? ` c-${n.color}` : '') + (state.selected.has(n.id) ? ' selected' : '');
     card.dataset.id = n.id;
-    card.draggable = !inTrash;
+    card.draggable = !inTrash && !IS_MOBILE;
     const img = firstImage(n.html);
     const snippet = (n.text || '').slice(0, 220);
     const dateText = inTrash
@@ -558,6 +583,7 @@ function renderList() {
     card.querySelector('.meta .line').textContent = snippet.replace(/\n+/g, ' ');
     card.querySelector('.meta small').textContent = dateText;
     container.appendChild(card);
+    if (img) hydrateImages(card);
   }
 
   const empty = $('#empty');
@@ -903,6 +929,7 @@ function openEditor(id) {
   $('#editor-view').classList.remove('hidden');
   $('#note-title').value = n.title;
   editor.innerHTML = n.html;
+  hydrateImages(editor);
   $('#save-state').textContent = '';
   const sel = $('#note-folder');
   sel.innerHTML = '';
@@ -945,7 +972,7 @@ function closeEditor() {
 function flushEditor() {
   const n = findNote(state.currentId);
   if (!n) return;
-  const html = editor.innerHTML;
+  const html = dehydrateHtml(editor.innerHTML);
   const title = $('#note-title').value;
   if (n.html === html && n.title === title) return;
   n.html = html;
@@ -1018,6 +1045,7 @@ async function insertImageFiles(files) {
   }
   editor.focus();
   document.execCommand('insertHTML', false, html.join('<br>') + '<br>');
+  hydrateImages(editor);
   onEdited();
   return true;
 }
@@ -1061,6 +1089,7 @@ async function externalizeDataImages() {
     const bin = Uint8Array.from(atob(m[2]), (c) => c.charCodeAt(0));
     img.src = await api.saveImage(bin.buffer, m[1], currentInVault());
   }
+  hydrateImages(editor);
 }
 
 editor.addEventListener('paste', async (e) => {
@@ -1150,6 +1179,7 @@ editor.addEventListener('click', (e) => {
 });
 // Electron has no built-in context menu, so provide the basic edit commands.
 editor.addEventListener('contextmenu', (e) => {
+  if (IS_MOBILE) return;
   e.preventDefault();
   const cmd = (c) => () => { editor.focus(); api.editCommand(c); };
   showContextMenu(e.clientX, e.clientY, [
@@ -1231,6 +1261,7 @@ $('#btn-insert-image').addEventListener('click', async () => {
   editor.focus();
   if (saved) { s.removeAllRanges(); s.addRange(saved); } else placeCaretAtEnd(editor);
   document.execCommand('insertHTML', false, urls.map((u) => `<img src="${u}">`).join('<br>') + '<br>');
+  hydrateImages(editor);
   onEdited();
 });
 
@@ -1597,7 +1628,10 @@ $('#sidebar').addEventListener('click', (e) => {
     return;
   }
   const item = e.target.closest('.nav-item');
-  if (item) setView(item.dataset.view);
+  if (item) {
+    setView(item.dataset.view);
+    closeDrawer();
+  }
 });
 $('#sidebar').addEventListener('contextmenu', (e) => {
   const row = e.target.closest('.folder-item');
@@ -1918,6 +1952,32 @@ document.addEventListener('paste', async (e) => {
 
 api.onFlush(async () => { flushEditor(); await persist(true); });
 api.onNewNote(() => { if (state.currentId) closeEditor(); createNote(); });
+
+// ---------------------------------------------------------------- mobile
+
+// On phones the sidebar is a drawer opened from the ☰ button.
+const openDrawer = () => document.documentElement.classList.add('drawer-open');
+const closeDrawer = () => document.documentElement.classList.remove('drawer-open');
+$('#btn-mobile-menu').addEventListener('click', openDrawer);
+$('#drawer-backdrop').addEventListener('click', closeDrawer);
+
+// Android back button: close the top-most thing; false lets the app go to the background.
+function handleBack() {
+  const shown = (sel) => !$(sel).classList.contains('hidden');
+  if (shown('#import-dialog')) { $('#import-cancel').click(); return true; }
+  if (shown('#modal')) { $('#modal-cancel').click(); return true; }
+  if (document.documentElement.classList.contains('drawer-open')) { closeDrawer(); return true; }
+  if (shown('#lightbox')) { $('#lightbox').classList.add('hidden'); return true; }
+  if (shown('#context-menu')) { hideContextMenu(); return true; }
+  if (shown('#color-palette')) { closePalette(); return true; }
+  if (selectedImg) { hideImageBar(); return true; }
+  if (state.currentId) { closeEditor(); return true; }
+  if (state.selecting) { state.selecting = false; state.selected.clear(); renderList(); return true; }
+  if (state.search) { $('#search').value = ''; state.search = ''; renderList(); return true; }
+  if (state.view !== 'all') { setView('all'); return true; }
+  return false;
+}
+if (api.onBack) api.onBack(handleBack);
 
 // ---------------------------------------------------------------- boot
 

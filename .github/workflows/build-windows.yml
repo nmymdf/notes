@@ -1,4 +1,4 @@
-name: Build Windows app
+name: Build Windows & Android apps
 
 on:
   push:
@@ -6,11 +6,8 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
-  build:
+  windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,16 +19,53 @@ jobs:
       - run: npx electron-builder --win --publish never
       - uses: actions/upload-artifact@v4
         with:
-          name: DeskNotes-windows
+          name: windows
           path: |
             dist/DeskNotes.exe
             dist/DeskNotes-Setup.exe
-      # Publish a release so there is a permanent direct download link:
-      # https://github.com/<owner>/<repo>/releases/latest/download/DeskNotes.exe
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+      - run: npm run android
+      - name: Build APK
+        working-directory: android
+        run: ./gradlew assembleRelease --no-daemon
+      - run: cp android/app/build/outputs/apk/release/app-release.apk DeskNotes.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: DeskNotes.apk
+
+  # Publish only when both builds succeeded, so the download links always work.
+  release:
+    needs: [windows, android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
       - name: Read version
         id: ver
-        shell: bash
         run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+      # Permanent direct download links:
+      # https://github.com/<owner>/<repo>/releases/latest/download/DeskNotes.exe (.apk)
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.ver.outputs.version }}
@@ -40,11 +74,13 @@ jobs:
           make_latest: true
           overwrite_files: true
           body: |
-            下載方式（Windows）：
-            - **DeskNotes.exe**：免安裝版，下載後點兩下就能用
-            - **DeskNotes-Setup.exe**：安裝版，會建立桌面捷徑
+            下載方式：
+            - **DeskNotes.exe**：Windows 免安裝版，下載後點兩下就能用
+            - **DeskNotes-Setup.exe**：Windows 安裝版，會建立桌面捷徑
+            - **DeskNotes.apk**：安卓手機版（需允許「安裝不明來源的應用程式」）
 
-            第一次執行若出現藍色「Windows 已保護您的電腦」，按「其他資訊」→「仍要執行」。
+            Windows 第一次執行若出現藍色「Windows 已保護您的電腦」，按「其他資訊」→「仍要執行」。
           files: |
             dist/DeskNotes.exe
             dist/DeskNotes-Setup.exe
+            dist/DeskNotes.apk
