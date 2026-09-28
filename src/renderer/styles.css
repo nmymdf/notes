@@ -513,6 +513,7 @@ html:not(.mobile) .mobile-only { display: none !important; }
 .mobile .toolbar { margin: 0 8px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
 .mobile .toolbar::-webkit-scrollbar { display: none; }
 .mobile .toolbar button, .mobile .toolbar .color { flex: none; min-width: 40px; height: 38px; }
+.mobile .toolbar .draw-first { display: inline-flex; align-items: center; gap: 4px; padding: 0 10px; color: var(--accent); font-weight: 600; }
 .mobile .editor-scroll { padding: 8px 8px 160px; }
 .mobile #editor { padding: 4px 6px; }
 .mobile .modal-box { width: min(380px, 92vw); }

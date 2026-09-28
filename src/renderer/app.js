@@ -1889,6 +1889,13 @@ async function newDrawing() {
   }
 }
 $('#btn-draw').addEventListener('click', newDrawing);
+// Phone: the toolbar scrolls sideways, so put 畫圖 first where it's seen.
+if (IS_MOBILE) {
+  const b = $('#btn-draw');
+  b.classList.add('draw-first');
+  b.insertAdjacentHTML('beforeend', '<span>畫圖</span>');
+  $('#toolbar').prepend(b);
+}
 
 // Draw on a picture in the note, or edit an earlier drawing again.
 async function drawOnImage(img) {
