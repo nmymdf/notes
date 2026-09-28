@@ -7,6 +7,21 @@ const $$ = (sel) => [...document.querySelectorAll(sel)];
 const TRASH_DAYS = 30;
 // The Android build (src/mobile/platform.js) sets api.mobile.
 const IS_MOBILE = !!api.mobile;
+
+// 外觀: black (default) or white background, remembered on this device only.
+function applyTheme(theme) {
+  document.documentElement.classList.toggle('light', theme === 'light');
+  const label = document.querySelector('#btn-theme span');
+  if (label) label.textContent = theme === 'light' ? '外觀：白底' : '外觀：黑底';
+}
+let theme = 'dark';
+try { theme = localStorage.getItem('desknotes.theme') || 'dark'; } catch { /* ignore */ }
+applyTheme(theme);
+document.querySelector('#btn-theme').addEventListener('click', () => {
+  theme = theme === 'light' ? 'dark' : 'light';
+  try { localStorage.setItem('desknotes.theme', theme); } catch { /* ignore */ }
+  applyTheme(theme);
+});
 const PREFS_KEY = 'desknotes.prefs';
 
 let db = { version: 1, folders: [], notes: [] };

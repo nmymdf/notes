@@ -525,3 +525,51 @@ html:not(.mobile) .mobile-only { display: none !important; }
 .mobile #editor { padding: 4px 6px; }
 .mobile .modal-box { width: min(380px, 92vw); }
 .mobile .img-bar button { padding: 8px 10px; }
+
+/* ---------------- 外觀：白底 (html.light) ---------------- */
+html.light {
+  --bg: #f4f4f4;
+  --panel: #ffffff;
+  --panel-2: #ececec;
+  --card: #ffffff;
+  --card-hover: #f0f0f0;
+  --text: #1b1b1b;
+  --muted: #6b6b6b;
+  --line: #d6d6d6;
+  --accent: #d98a00;
+  --danger: #d93636;
+  color-scheme: light;
+}
+html.light .text-btn.primary { background: #ffb020; }
+html.light .nav-item.active { background: #e6e6e6; }
+html.light #sidebar hr, html.light .trash-bottom { border-color: #c8c8c8; }
+html.light .folder-item button.caret:hover, html.light .palette-none:hover, html.light .palette-custom:hover,
+html.light .img-bar button:hover, html.light .context-menu button:hover { background: #e8e8e8; }
+html.light .search, html.light .palette, html.light .img-bar, html.light .context-menu { background: #ffffff; border-color: #d0d0d0; }
+html.light .search svg, html.light .palette-custom, html.light .modal-box p, html.light .import-map label,
+html.light #sync-box label.field, html.light #editor blockquote { color: #555; }
+html.light .note-card .thumb { box-shadow: 0 0 0 1px #e2e2e2 inset; }
+html.light .note-card.c-red .thumb { --tb: #fde4e5; } html.light .note-card.c-red:hover .thumb { --tb: #fbd3d5; }
+html.light .note-card.c-yellow .thumb { --tb: #fdf3cf; } html.light .note-card.c-yellow:hover .thumb { --tb: #fbeab3; }
+html.light .note-card.c-green .thumb { --tb: #ddf3e2; } html.light .note-card.c-green:hover .thumb { --tb: #cbecd3; }
+html.light .file-row.selected, html.light #notes.table .note-card.selected, html.light #notes.list .note-card.selected { background: #dbe8ff; }
+html.light #notes.table .note-card { border-bottom-color: #e4e4e4; }
+html.light #notes.table .t-body { color: #555; }
+html.light .section-head, html.light #sync-box .row, html.light .import-preview .row, html.light .import-preview .row > div:first-child { border-color: #e0e0e0; }
+html.light input, html.light select, html.light #sync-box .pair-box { background: #ffffff; border-color: #cfcfcf; }
+html.light .import-preview .row.head > div { background: #f0f0f0; }
+html.light #note-title:focus { background: #ffffff; }
+html.light .toolbar .split:hover { background: #e4e4e4; }
+html.light #editor pre, html.light #editor code { background: #eeeeee; }
+html.light #editor a, html.light #editor a[href] { color: #1565c0; }
+html.light #editor:empty::before, html.light #editor ul.checklist > li.done { color: #9a9a9a; }
+html.light .sidebar-foot, html.light .sync-last { color: #888; }
+html.light .modal-box { box-shadow: 0 10px 40px #0004; }
+html.light ::-webkit-scrollbar-thumb { background: #c8c8c8; }
+/* Text colors picked on the black background: white / light grey / yellow text
+   would vanish on white, so they show darker. Highlight colors are dark, so
+   highlighted text keeps white letters. */
+html.light #editor font[color="#ffffff"], html.light #editor [style*="color: rgb(255, 255, 255)"]:not([style*="background"]) { color: #1b1b1b !important; }
+html.light #editor font[color="#bdbdbd"] { color: #616161 !important; }
+html.light #editor font[color="#ffeb3b"] { color: #b59a00 !important; }
+html.light #editor [style*="background-color"] { color: #ffffff; }
