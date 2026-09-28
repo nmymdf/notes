@@ -273,9 +273,11 @@ const childrenOf = (scope, parentId) => foldersOf(scope)
   .filter((f) => (f.parentId || null) === parentId)
   .sort((a, b) => (a.order ?? a.createdAt) - (b.order ?? b.createdAt));
 const hasChildren = (id) => foldersOf(folderScope(id)).some((f) => f.parentId === id);
-// Folders hold either notes (default) or files (kind 'files', only in the normal area).
-const isFileFolder = (id) => findFolder(id)?.kind === 'files';
-const kindOf = (f) => f.kind || 'notes';
+// Folders in the normal area hold both notes and files (a folder's old `kind`
+// field is ignored); folders in 上鎖筆記 hold notes only.
+const isFileFolder = (id) => !!findFolder(id) && folderScope(id) === 'db';
+const isNoteId = (id) => db.notes.some((n) => n.id === id) || vault.notes.some((n) => n.id === id);
+const hasLiveFiles = (folderIds) => db.files.some((f) => !f.deletedAt && folderIds.includes(f.folderId));
 function folderAndChildrenIds(id) {
   return [id, ...foldersOf(folderScope(id)).filter((f) => f.parentId === id).map((f) => f.id)];
 }
@@ -288,10 +290,9 @@ function repairFolders(scope) {
   for (const f of list) if (f.parentId && !list.some((p) => p.id === f.parentId && !p.parentId)) f.parentId = null;
 }
 
-function folderOptions(scope = 'db', includeNone = true, kind = 'notes') {
+function folderOptions(scope = 'db', includeNone = true) {
   const opts = includeNone ? [{ value: '', label: scope === 'vault' ? '（上鎖筆記，不分資料夾）' : '（未分類）' }] : [];
   for (const f of childrenOf(scope, null)) {
-    if (kindOf(f) !== kind) continue;
     opts.push({ value: f.id, label: f.name });
     for (const c of childrenOf(scope, f.id)) opts.push({ value: c.id, label: `　└ ${c.name}` });
   }
@@ -333,7 +334,7 @@ function renderFolderTree(list, scope, notes) {
   const liveFiles = (db.files || []).filter((f) => !f.deletedAt);
   const count = (id) => {
     const ids = folderAndChildrenIds(id);
-    return (isFileFolder(id) ? liveFiles : notes).filter((n) => ids.includes(n.folderId)).length;
+    return notes.filter((n) => ids.includes(n.folderId)).length + (scope === 'db' ? liveFiles.filter((x) => ids.includes(x.folderId)).length : 0);
   };
   for (const f of childrenOf(scope, null)) {
     const kids = childrenOf(scope, f.id);
@@ -354,24 +355,27 @@ function folderRow(f, count, kidCount) {
     : kidCount ? `<button class="caret" data-toggle="${f.id}" title="展開／收合">${state.prefs.collapsed[f.id] ? '▸' : '▾'}</button>`
       : '<i class="caret"></i>';
   const tag = db.defaultFolderId === f.id ? '<small class="default-tag" title="新筆記預設放在這裡">預設</small>' : '';
-  a.innerHTML = `${caret}<svg><use href="${f.kind === 'files' ? '#i-files' : '#i-folder'}"/></svg><span class="name"></span>${tag}<em>${count}</em>`;
-  if (f.kind === 'files') a.classList.add('files-folder');
+  a.innerHTML = `${caret}<svg><use href="#i-folder"/></svg><span class="name"></span>${tag}<em>${count}</em>`;
   a.querySelector('.name').textContent = f.name;
   a.title = f.name;
   return a;
 }
 
-async function newFolder(scope = 'db', parentId = null, kind = 'notes') {
-  if (parentId) kind = kindOf(findFolder(parentId));
+// On the computer each normal folder is also a real directory, so two folders
+// side by side can't share a name.
+function nameTaken(scope, parentId, name, exceptId) {
+  return scope === 'db' && childrenOf(scope, parentId).some((x) => x.id !== exceptId && x.name.trim().toLowerCase() === name.trim().toLowerCase());
+}
+async function newFolder(scope = 'db', parentId = null) {
   const title = parentId ? `在「${findFolder(parentId).name}」裡新增子資料夾`
-    : scope === 'vault' ? '新增上鎖資料夾' : kind === 'files' ? '新增檔案資料夾' : '新增筆記資料夾';
+    : scope === 'vault' ? '新增上鎖資料夾' : '新增資料夾';
   const name = await openModal({ title, input: '', okText: '建立' });
   if (!name) return null;
+  if (nameTaken(scope, parentId, name)) { toast(`已經有叫「${name}」的資料夾`); return null; }
   const f = { id: uid(), name, createdAt: Date.now(), parentId, order: childrenOf(scope, parentId).length };
-  if (kind === 'files') f.kind = 'files';
   foldersOf(scope).push(f);
   if (parentId && state.prefs.collapsed[parentId]) { delete state.prefs.collapsed[parentId]; savePrefs(); }
-  if (kind === 'files') await applyFileChanges(fileLayout());
+  if (scope === 'db') await applyFileChanges(fileLayout());
   persist();
   renderSidebar();
   return f;
@@ -381,9 +385,10 @@ async function renameFolder(id) {
   const f = findFolder(id);
   const name = await openModal({ title: '重新命名資料夾', input: f.name });
   if (!name) return;
+  if (nameTaken(folderScope(id), f.parentId || null, name, id)) { toast(`已經有叫「${name}」的資料夾`); return; }
   const before = fileLayout();
   f.name = name;
-  if (f.kind === 'files') await applyFileChanges(before);
+  if (folderScope(id) === 'db') await applyFileChanges(before);
   persist();
   render();
 }
@@ -392,26 +397,9 @@ async function deleteFolder(id) {
   const scope = folderScope(id);
   const f = findFolder(id);
   const ids = folderAndChildrenIds(id);
-  if (f.kind === 'files') {
-    const inside = db.files.filter((x) => ids.includes(x.folderId) && !x.deletedAt);
-    const ok = await openModal({
-      title: `刪除檔案資料夾「${f.name}」${ids.length > 1 ? `（含 ${ids.length - 1} 個子資料夾）` : ''}？`,
-      text: inside.length ? `裡面的 ${inside.length} 個檔案會移到垃圾筒，30 天內可還原。` : '資料夾是空的。',
-      okText: '刪除', danger: true,
-    });
-    if (!ok) return;
-    const before = fileLayout();
-    const now = Date.now();
-    for (const x of inside) x.deletedAt = now;
-    db.folders = db.folders.filter((x) => !ids.includes(x.id));
-    if (ids.includes(state.view)) state.view = 'all';
-    normalizeOrders('db', f.parentId || null);
-    await applyFileChanges(before);
-    await persist(true);
-    render();
-    return;
-  }
   const inside = notesOf(scope).filter((n) => ids.includes(n.folderId) && !n.deletedAt);
+  const insideFiles = scope === 'db' ? db.files.filter((x) => ids.includes(x.folderId) && !x.deletedAt) : [];
+  const filesText = insideFiles.length ? `\n裡面的 ${insideFiles.length} 個檔案會移到垃圾筒，${TRASH_DAYS} 天內可還原。` : '';
   const subs = ids.length - 1;
   const what = subs ? `（含 ${subs} 個子資料夾）` : '';
   let mode = 'keep';
@@ -427,13 +415,16 @@ async function deleteFolder(id) {
       ];
     mode = await openModal({
       title: `刪除資料夾「${f.name}」${what}？`,
-      text: `裡面有 ${inside.length} 則筆記，要怎麼處理？`,
+      text: `裡面有 ${inside.length} 則筆記，要怎麼處理？${filesText}`,
       options, okText: '刪除', danger: true,
     });
   } else {
-    mode = (await openModal({ title: `刪除資料夾「${f.name}」${what}？`, text: '資料夾是空的。', okText: '刪除', danger: true })) && 'keep';
+    mode = (await openModal({ title: `刪除資料夾「${f.name}」${what}？`, text: filesText.trim() || '資料夾是空的。', okText: '刪除', danger: true })) && 'keep';
   }
   if (!mode) return;
+  const beforeFiles = fileLayout();
+  const now = Date.now();
+  for (const x of insideFiles) x.deletedAt = now;
   if (mode === 'trash') trashNotes(inside.map((n) => n.id));
   if (mode === 'destroy') vault.notes = vault.notes.filter((n) => !inside.includes(n));
   setFolders(scope, foldersOf(scope).filter((x) => !ids.includes(x.id)));
@@ -441,6 +432,7 @@ async function deleteFolder(id) {
   if (ids.includes(db.defaultFolderId)) db.defaultFolderId = null;
   if (ids.includes(state.view)) state.view = scope === 'vault' ? 'vault' : 'all';
   normalizeOrders(scope, f.parentId || null);
+  if (scope === 'db') await applyFileChanges(beforeFiles);
   await persist(true);
   render();
 }
@@ -449,18 +441,18 @@ async function mergeFolder(id) {
   const scope = folderScope(id);
   const f = findFolder(id);
   const ids = folderAndChildrenIds(id);
-  const targets = folderOptions(scope, false, kindOf(f)).filter((o) => !ids.includes(o.value));
+  const targets = folderOptions(scope, false).filter((o) => !ids.includes(o.value));
   if (!targets.length) { toast('沒有其他資料夾可以合併'); return; }
   const target = await openModal({
     title: `把「${f.name}」合併到…`,
-    text: `「${f.name}」裡的筆記會移到選擇的資料夾，然後刪除「${f.name}」。`,
+    text: `「${f.name}」裡的筆記${scope === 'db' ? '和檔案' : ''}會移到選擇的資料夾，然後刪除「${f.name}」。`,
     options: targets, okText: '合併',
   });
   if (!target) return;
   const t = findFolder(target);
   const removed = [id];
   const before = fileLayout();
-  const items = f.kind === 'files' ? db.files : notesOf(scope);
+  const items = scope === 'db' ? [...notesOf(scope), ...db.files] : notesOf(scope);
   if (!t.parentId) {
     // Target is top-level: subfolders keep existing, now under the target.
     for (const k of foldersOf(scope).filter((x) => x.parentId === id)) { k.parentId = t.id; k.order = 1e6 + (k.order || 0); }
@@ -475,7 +467,7 @@ async function mergeFolder(id) {
   normalizeOrders(scope, f.parentId || null);
   if (removed.includes(db.defaultFolderId)) db.defaultFolderId = t.id;
   if (removed.includes(state.view)) state.view = t.id;
-  if (f.kind === 'files') await applyFileChanges(before);
+  if (scope === 'db') await applyFileChanges(before);
   await persist(true);
   render();
   toast(`已合併到「${t.name}」`);
@@ -494,7 +486,7 @@ async function placeFolder(id, parentId, beforeId) {
   sibs.forEach((x, i) => { x.order = i; });
   if (oldParent !== parentId) normalizeOrders(scope, oldParent);
   if (parentId && state.prefs.collapsed[parentId]) { delete state.prefs.collapsed[parentId]; savePrefs(); }
-  if (f.kind === 'files') await applyFileChanges(before);
+  if (scope === 'db') await applyFileChanges(before);
   persist();
   renderSidebar();
 }
@@ -507,10 +499,9 @@ function folderContextMenu(e, id) {
   items.push({ label: '重新命名', action: () => renameFolder(id) });
   items.push({ label: '合併到其他資料夾…', action: () => mergeFolder(id) });
   if (f.parentId) items.push({ label: '移到最外層', action: () => placeFolder(id, null, null) });
-  if (f.kind === 'files') {
+  if (scope === 'db') {
     items.push({ label: '加入檔案…', action: async () => addFiles(id, await api.files.pick()) });
     if (!api.files.inApp) items.push({ label: '在檔案總管中開啟', action: () => api.files.openFolder(db.folders, id) });
-  } else if (scope === 'db') {
     items.push({
       label: db.defaultFolderId === id ? '取消「新筆記預設資料夾」' : '設為新筆記預設資料夾',
       action: () => {
@@ -610,13 +601,13 @@ async function scanFiles() {
   }
   const relOf = (dir) => dir.replace(/\\/g, '/').split('/files/').pop();
   const dirToId = new Map();
-  for (const f of db.folders.filter((x) => x.kind === 'files')) {
+  for (const f of db.folders) {
     const parent = findFolder(f.parentId);
     dirToId.set(parent ? `${parent.name}/${f.name}` : f.name, f.id);
   }
   for (const nf of r.newFolders.sort((a, b) => (a.parentDir ? 1 : 0) - (b.parentDir ? 1 : 0))) {
     const parentId = nf.parentDir ? dirToId.get(relOf(nf.parentDir)) || null : null;
-    const f = { id: uid(), name: nf.name, kind: 'files', createdAt: Date.now(), parentId, order: childrenOf('db', parentId).length };
+    const f = { id: uid(), name: nf.name, createdAt: Date.now(), parentId, order: childrenOf('db', parentId).length };
     db.folders.push(f);
     dirToId.set(relOf(nf.dir), f.id);
   }
@@ -627,8 +618,10 @@ async function scanFiles() {
   }
   for (const c of r.changedFiles) Object.assign(db.files.find((f) => f.id === c.id) || {}, { size: c.size, mtime: c.mtime, hash: c.hash });
   db.files = db.files.filter((f) => !r.missingFileIds.includes(f.id));
-  db.folders = db.folders.filter((f) => !r.missingFolderIds.includes(f.id));
-  if (r.missingFolderIds.includes(state.view)) state.view = 'all';
+  // A folder without a directory (a note folder from before, or one deleted in
+  // File Explorer) keeps existing: folders hold notes too, which aren't on
+  // disk. Its directory is created again; files that were in it are gone.
+  if (r.missingFolderIds.length) await applyFileChanges(fileLayout());
   await persist(true);
   render();
   return true;
@@ -667,9 +660,9 @@ async function restoreFiles(ids) {
     if (!ids.includes(f.id)) continue;
     if (!isFileFolder(f.folderId)) {
       // Its folder is gone: restore into a 還原的檔案 folder.
-      let target = db.folders.find((x) => x.kind === 'files' && x.name === '還原的檔案' && !x.parentId);
+      let target = db.folders.find((x) => x.name === '還原的檔案' && !x.parentId);
       if (!target) {
-        target = { id: uid(), name: '還原的檔案', kind: 'files', createdAt: Date.now(), parentId: null, order: childrenOf('db', null).length };
+        target = { id: uid(), name: '還原的檔案', createdAt: Date.now(), parentId: null, order: childrenOf('db', null).length };
         db.folders.push(target);
       }
       f.folderId = target.id;
@@ -700,8 +693,9 @@ async function renameFile(id) {
 }
 
 async function moveFiles(ids) {
-  const opts = folderOptions('db', false, 'files');
-  const target = await openModal({ title: '移動到檔案資料夾', options: opts, okText: '移動' });
+  const opts = folderOptions('db', false);
+  if (!opts.length) { toast('先建立一個資料夾'); return false; }
+  const target = await openModal({ title: '移動到資料夾', options: opts, okText: '移動' });
   if (!target) return false;
   const before = fileLayout();
   for (const f of db.files) if (ids.includes(f.id)) f.folderId = target;
@@ -825,7 +819,6 @@ function fileRow(f) {
 // ---------------------------------------------------------------- list
 
 function visibleNotes() {
-  if (isFileFolder(state.view)) return [];
   const inFolder = findFolder(state.view) ? folderAndChildrenIds(state.view) : null;
   if (inVaultView()) {
     let notes = vault.unlocked ? vault.notes : [];
@@ -892,13 +885,12 @@ function renderList() {
   $('#view-title').textContent = viewTitle();
   $('#btn-add-files').classList.toggle('hidden', !inFiles);
   $('#btn-open-dir').classList.toggle('hidden', !inFiles || !!api.files?.inApp);
-  $('#color-filter').classList.toggle('hidden', inFiles);
   $('#btn-empty-trash').classList.toggle('hidden', !inTrash || state.selecting);
-  $('#btn-new-note').classList.toggle('hidden', inTrash || gate || inFiles);
-  $('#btn-new-image-note').classList.toggle('hidden', inTrash || gate || inFiles);
-  $('#btn-new-voice-note').classList.toggle('hidden', inTrash || gate || inFiles);
+  $('#btn-new-note').classList.toggle('hidden', inTrash || gate);
+  $('#btn-new-image-note').classList.toggle('hidden', inTrash || gate);
+  $('#btn-new-voice-note').classList.toggle('hidden', inTrash || gate);
   $('#btn-select-mode').classList.toggle('hidden', gate);
-  $('#btn-view-mode').classList.toggle('hidden', gate || inFiles);
+  $('#btn-view-mode').classList.toggle('hidden', gate);
   $('#btn-vault-lock').classList.toggle('hidden', !inVault || gate);
   $('#btn-vault-password').classList.toggle('hidden', !inVault || gate);
   $('.search').classList.toggle('hidden', gate);
@@ -909,13 +901,13 @@ function renderList() {
   $('#select-actions').classList.toggle('hidden', !state.selecting);
   $('.topbar').classList.toggle('selecting', state.selecting);
   $('#btn-sel-restore').classList.toggle('hidden', !inTrash);
-  $('#btn-sel-color').classList.toggle('hidden', inTrash || inFiles);
+  $('#btn-sel-color').classList.toggle('hidden', inTrash);
   $$('#color-filter button').forEach((b) => b.classList.toggle('on', b.dataset.cf === (state.colorFilter || '')));
   $('#btn-sel-move').classList.toggle('hidden', inTrash);
-  $('#btn-sel-vault').classList.toggle('hidden', inTrash || inVault || inFiles);
+  $('#btn-sel-vault').classList.toggle('hidden', inTrash || inVault);
   $('#btn-sel-unvault').classList.toggle('hidden', !inVault);
   $('#btn-sel-delete').lastChild.textContent = inTrash || inVault ? '永久刪除' : '刪除';
-  $('#select-count').textContent = `已選取 ${state.selected.size} ${inFiles ? '個' : '則'}`;
+  $('#select-count').textContent = `已選取 ${state.selected.size} ${inFiles || inTrash ? '項' : '則'}`;
   $$('#select-actions .text-btn:not(#btn-select-all):not(#btn-select-done)')
     .forEach((b) => { b.disabled = state.selected.size === 0; });
 
@@ -924,19 +916,9 @@ function renderList() {
   $('#btn-view-mode use').setAttribute('href', { grid: '#i-grid', list: '#i-list', table: '#i-table' }[state.prefs.layout] || '#i-grid');
 
   const container = $('#notes');
-  container.className = (inFiles ? 'files' : state.prefs.layout) + (gate ? ' hidden' : '');
+  container.className = state.prefs.layout + (gate ? ' hidden' : '');
   container.classList.toggle('selecting', state.selecting);
   container.innerHTML = '';
-
-  if (inFiles) {
-    const files = visibleFiles();
-    for (const f of files) container.appendChild(fileRow(f));
-    const empty = $('#empty');
-    empty.classList.toggle('hidden', files.length > 0);
-    empty.innerHTML = state.search ? '找不到符合的檔案'
-      : `這個資料夾是空的<br><small>按「加入檔案」${api.files.inApp ? '' : '，或直接把檔案拖進來'}</small>`;
-    return;
-  }
 
   const notes = visibleNotes();
   if (state.prefs.layout === 'table' && notes.length) {
@@ -976,19 +958,22 @@ function renderList() {
     if (img) hydrateImages(card);
   }
 
-  const trashFilesList = inTrash ? visibleFiles() : [];
-  if (trashFilesList.length) {
+  // Files (in the trash, or in the open folder) come after the notes.
+  const filesList = (inTrash || inFiles) && !state.colorFilter ? visibleFiles() : [];
+  if (filesList.length) {
     const box = document.createElement('div');
     box.className = 'trash-files';
     box.innerHTML = '<div class="section-head">檔案</div>';
-    for (const f of trashFilesList) box.appendChild(fileRow(f));
+    for (const f of filesList) box.appendChild(fileRow(f));
     container.appendChild(box);
   }
 
   const empty = $('#empty');
-  empty.classList.toggle('hidden', notes.length + trashFilesList.length > 0 || gate);
-  if (!notes.length && !trashFilesList.length) {
-    empty.innerHTML = state.search ? '找不到符合的筆記'
+  empty.classList.toggle('hidden', notes.length + filesList.length > 0 || gate);
+  if (!notes.length && !filesList.length) {
+    empty.innerHTML = state.search ? '找不到符合的筆記或檔案'
+      : inFiles && !state.colorFilter ? `這個資料夾是空的<br><small>按「建立筆記」或「加入檔案」${api.files?.inApp ? '' : '，也可以直接把檔案拖進來'}</small>`
+      : state.search ? '找不到符合的筆記'
       : state.colorFilter ? '沒有這個顏色的筆記<br><small>按「全部」可顯示所有筆記</small>'
       : inVault ? '上鎖筆記是空的<br><small>在這裡建立的筆記會加密保存，也可以在其他筆記按右鍵「移到上鎖筆記」</small>'
       : inTrash ? `垃圾筒是空的<br><small>刪除的筆記會保留 ${TRASH_DAYS} 天</small>`
@@ -1091,6 +1076,11 @@ function copyFolderTree(id, toScope) {
 async function moveFolderToVault(id) {
   const f = findFolder(id);
   const ids = folderAndChildrenIds(id);
+  if (hasLiveFiles(ids)) {
+    openModal({ title: '無法移到上鎖筆記', text: `「${f.name}」裡有檔案。上鎖筆記只能放筆記，請先把檔案移到其他資料夾。`, okText: '好' });
+    return;
+  }
+  const beforeFiles = fileLayout();
   const inside = db.notes.filter((n) => ids.includes(n.folderId) && !n.deletedAt);
   const subs = ids.length - 1;
   const ok = await openModal({
@@ -1106,6 +1096,7 @@ async function moveFolderToVault(id) {
   if (ids.includes(db.defaultFolderId)) db.defaultFolderId = null;
   normalizeOrders('db', f.parentId || null);
   if (ids.includes(state.view)) state.view = map[state.view];
+  await applyFileChanges(beforeFiles); // remove its (empty) directories
   await persist(true);
   stamp();
   await api.save(db, { scrub: true });
@@ -1132,6 +1123,7 @@ async function moveFolderOutOfVault(id) {
   vault.folders = vault.folders.filter((x) => !ids.includes(x.id));
   normalizeOrders('vault', f.parentId || null);
   if (ids.includes(state.view)) state.view = map[state.view];
+  await applyFileChanges(fileLayout()); // its directories on the computer
   await persist(true);
   render();
   toast(`已把「${f.name}」移出上鎖筆記`);
@@ -1226,7 +1218,7 @@ function createNote(html = '') {
   const toVault = inVaultView() && vault.unlocked;
   if (inVaultView() && !vault.unlocked) state.view = 'all';
   let folderId = null;
-  if (findFolder(state.view) && !isFileFolder(state.view)) folderId = state.view; // current folder (normal or locked)
+  if (findFolder(state.view)) folderId = state.view; // current folder (normal or locked)
   else if (!toVault && state.view !== 'uncategorized' && db.folders.some((f) => f.id === db.defaultFolderId)) {
     folderId = db.defaultFolderId;
   }
@@ -2400,14 +2392,14 @@ $('#notes').addEventListener('contextmenu', (e) => {
 $('#notes').addEventListener('dragstart', (e) => {
   const row = e.target.closest('.file-row');
   if (row) {
-    const ids = state.selected.has(row.dataset.fileId) ? [...state.selected] : [row.dataset.fileId];
+    const ids = state.selected.has(row.dataset.fileId) ? [...state.selected].filter((id) => !isNoteId(id)) : [row.dataset.fileId];
     e.dataTransfer.setData('application/x-file-ids', JSON.stringify(ids));
     e.dataTransfer.effectAllowed = 'move';
     return;
   }
   const card = e.target.closest('.note-card');
   if (!card) return;
-  const ids = state.selected.has(card.dataset.id) ? [...state.selected] : [card.dataset.id];
+  const ids = state.selected.has(card.dataset.id) ? [...state.selected].filter(isNoteId) : [card.dataset.id];
   e.dataTransfer.setData('application/x-note-ids', JSON.stringify(ids));
   e.dataTransfer.effectAllowed = 'move';
 });
@@ -2446,7 +2438,7 @@ function folderDrop(e, target) {
   }
   const v = target.dataset.view;
   if (v === 'vault') {
-    if (src.kind === 'files') return null;
+    if (scope === 'db' && hasLiveFiles(folderAndChildrenIds(src.id))) return null; // 上鎖筆記 holds notes only
     return scope === 'db'
       ? { mark: 'drop-target', run: () => moveFolderToVault(src.id) }
       : { mark: 'drop-target', run: () => placeFolder(src.id, null, null) };
@@ -2456,18 +2448,17 @@ function folderDrop(e, target) {
   const r = target.getBoundingClientRect();
   const pos = (e.clientY - r.top) / r.height;
   if (pos > 0.28 && pos < 0.72 && !t.parentId) {
-    if (srcHasKids || t.id === src.parentId || kindOf(t) !== kindOf(src)) return null; // two levels, same kind
+    if (srcHasKids || t.id === src.parentId) return null; // two levels at most
     return { mark: 'drop-target', run: () => placeFolder(src.id, t.id, null) };
   }
   const parent = t.parentId || null;
-  if (parent && (srcHasKids || kindOf(findFolder(parent)) !== kindOf(src))) return null;
+  if (parent && srcHasKids) return null;
   const sibs = childrenOf(scope, parent).filter((x) => x.id !== src.id);
   const before = pos <= 0.5 ? t.id : (sibs[sibs.findIndex((x) => x.id === t.id) + 1]?.id || null);
   return { mark: pos <= 0.5 ? 'drop-before' : 'drop-after', run: () => placeFolder(src.id, parent, before) };
 }
 
 async function dropNotes(ids, v) {
-  if (isFileFolder(v)) { toast('筆記不能放進檔案資料夾'); return; }
   const fromVault = vault.notes.some((n) => ids.includes(n.id));
   const toVault = v === 'vault' || folderScope(v) === 'vault';
   if (fromVault) {
@@ -2508,7 +2499,7 @@ $('#sidebar').addEventListener('dragover', (e) => {
     target.classList.add(act.mark);
   } else if (types.includes('application/x-note-ids')) {
     const v = target.dataset.view;
-    if (!v || v === 'starred' || isFileFolder(v)) return;
+    if (!v || v === 'starred') return;
     e.preventDefault();
     target.classList.add('drop-target');
   } else if (types.includes('application/x-file-ids') || (types.includes('Files') && api.files.pathOf)) {
@@ -2617,10 +2608,7 @@ $('#sidebar').addEventListener('contextmenu', (e) => {
 });
 const lastFolderClick = { id: null, at: 0 };
 function newFolderMenu(e) {
-  showContextMenu(e.clientX, e.clientY, [
-    { label: '📁 新增筆記資料夾', action: () => newFolder('db', null, 'notes') },
-    { label: '🗂 新增檔案資料夾', action: () => newFolder('db', null, 'files') },
-  ]);
+  newFolder('db', null);
 }
 $('#btn-new-folder').addEventListener('click', (e) => { e.stopPropagation(); newFolderMenu(e); });
 $('#btn-toggle-sidebar').addEventListener('click', () => {
@@ -2813,6 +2801,7 @@ $('#btn-sel-delete').addEventListener('click', async () => {
       if (ids.length) { db.notes = db.notes.filter((n) => !ids.includes(n.id)); await persist(true); api.cleanupImages(); }
     } else {
       await trashFiles(fileIds);
+      if (ids.length) trashNotes(ids);
     }
     state.selected.clear();
     state.selecting = false;
@@ -2835,15 +2824,28 @@ $('#btn-sel-restore').addEventListener('click', async () => {
   render();
 });
 $('#btn-sel-move').addEventListener('click', async () => {
-  if (isFileFolder(state.view)) {
-    if (!(await moveFiles([...state.selected]))) return;
-  } else if (!(await moveNotes([...state.selected]))) return;
+  const fileIds = [...state.selected].filter((id) => !isNoteId(id));
+  const noteIds = [...state.selected].filter(isNoteId);
+  if (fileIds.length && noteIds.length) {
+    // Notes and files together: one folder for both (files need a folder).
+    const target = await openModal({ title: '移動到資料夾', options: folderOptions('db', false), okText: '移動' });
+    if (!target) return;
+    for (const n of db.notes) if (noteIds.includes(n.id)) n.folderId = target;
+    const before = fileLayout();
+    for (const f of db.files) if (fileIds.includes(f.id)) f.folderId = target;
+    await applyFileChanges(before);
+    await persist(true);
+  } else if (fileIds.length) {
+    if (!(await moveFiles(fileIds))) return;
+  } else if (!(await moveNotes(noteIds))) return;
   state.selected.clear();
   state.selecting = false;
   render();
 });
 $('#btn-sel-vault').addEventListener('click', async () => {
-  if (!(await moveToVault([...state.selected]))) return;
+  const noteIds = [...state.selected].filter(isNoteId);
+  if (noteIds.length < state.selected.size) toast('檔案不能放進上鎖筆記，只移動筆記');
+  if (!noteIds.length || !(await moveToVault(noteIds))) return;
   state.selected.clear();
   state.selecting = false;
   render();

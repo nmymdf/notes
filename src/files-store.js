@@ -5,7 +5,8 @@
 //   data/.files-trash/<fileId>               files in the DeskNotes trash
 //   data/.sync-incoming/<fileId>             content received from the phone
 //
-// The renderer owns the records (db.folders with kind 'files', db.files) and
+// Every folder in the normal area (db.folders) has a directory; it holds that
+// folder's files (notes are not on disk). The renderer owns the records and
 // calls materialize(before, after) after every change; this module moves the
 // real files so the disk matches the records. scan() does the reverse: it
 // picks up files added, changed or deleted directly in File Explorer.
@@ -111,9 +112,7 @@ class FileStore {
       const src = o && this.contentPath(before.folders, o);
       if (src && fs.existsSync(src)) fs.copyFileSync(src, this.trashPath(p.toId));
     }
-    for (const f of after.folders || []) {
-      if (f.kind === 'files') fs.mkdirSync(this.folderDir(after.folders, f.id), { recursive: true });
-    }
+    for (const f of after.folders || []) fs.mkdirSync(this.folderDir(after.folders, f.id), { recursive: true });
     for (const n of after.files || []) {
       const o = oldById.get(n.id);
       const src = o ? this.contentPath(before.folders, o) : null;
@@ -154,7 +153,7 @@ class FileStore {
 
   // Remove directories that no longer belong to any folder (only if empty).
   removeEmptyDirs(folders) {
-    const keep = new Set(folders.filter((f) => f.kind === 'files').map((f) => this.folderDir(folders, f.id)));
+    const keep = new Set(folders.map((f) => this.folderDir(folders, f.id)));
     const walk = (dir, depth) => {
       for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
         if (!e.isDirectory()) continue;
@@ -169,8 +168,7 @@ class FileStore {
   // Compare the disk with the records: files/folders created, changed or
   // deleted directly in File Explorer.
   async scan(folders, files) {
-    const fileFolders = folders.filter((f) => f.kind === 'files');
-    const byDir = new Map(fileFolders.map((f) => [this.folderDir(folders, f.id), f]));
+    const byDir = new Map(folders.map((f) => [this.folderDir(folders, f.id), f]));
     const byPath = new Map(files.filter((f) => !f.deletedAt).map((f) => [this.filePath(folders, f), f]));
     const result = { newFolders: [], missingFolderIds: [], newFiles: [], changedFiles: [], missingFileIds: [] };
     const seenDirs = new Set();
