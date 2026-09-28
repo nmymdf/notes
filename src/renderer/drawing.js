@@ -205,7 +205,8 @@
       const bUndo = el('button', 'draw-tool', '↶'); bUndo.title = '復原 (Ctrl+Z)';
       const bRedo = el('button', 'draw-tool', '↷'); bRedo.title = '重做 (Ctrl+Y)';
       const bClear = el('button', 'draw-tool', '🗑'); bClear.title = '清除全部';
-      editBox.append(bUndo, bRedo, bClear);
+      const bFit = el('button', 'draw-tool', '⤢'); bFit.title = '看整張（兩指或 Ctrl + 滾輪放大後）';
+      editBox.append(bUndo, bRedo, bClear, bFit);
       let bgSel = null;
       if (d.bg !== 'image') {
         bgSel = el('select', 'draw-bg');
@@ -231,12 +232,74 @@
       const ctx = canvas.getContext('2d');
       const octx = overlay.getContext('2d');
 
+      // View zoom (two fingers / Ctrl + wheel): z times the fitted size, moved by (ox, oy).
+      let k = 1;
+      const view = { z: 1, ox: 0, oy: 0 };
+      function place() {
+        const w = d.w * k * view.z;
+        const h = d.h * k * view.z;
+        const mx = Math.max(0, (w - stage.clientWidth) / 2 + 40);
+        const my = Math.max(0, (h - stage.clientHeight) / 2 + 40);
+        view.ox = Math.min(mx, Math.max(-mx, view.ox));
+        view.oy = Math.min(my, Math.max(-my, view.oy));
+        wrap.style.width = `${w}px`;
+        wrap.style.height = `${h}px`;
+        wrap.style.transform = `translate(${(stage.clientWidth - w) / 2 + view.ox}px, ${(stage.clientHeight - h) / 2 + view.oy}px)`;
+      }
       function fit() {
         const r = stage.getBoundingClientRect();
-        const k = Math.min((r.width - 24) / d.w, (r.height - 24) / d.h, 4); // small pictures are shown enlarged
-        wrap.style.width = `${d.w * k}px`;
-        wrap.style.height = `${d.h * k}px`;
+        k = Math.min((r.width - 24) / d.w, (r.height - 24) / d.h, 4); // small pictures are shown enlarged
+        place();
       }
+      // Zoom to z keeping the stage point (px, py) (from the stage center) in place.
+      function zoomTo(z, px, py, from = view) {
+        const nz = Math.min(8, Math.max(1, z));
+        view.ox = px - (px - from.ox) * (nz / from.z);
+        view.oy = py - (py - from.oy) * (nz / from.z);
+        view.z = nz;
+        place();
+      }
+      const fromCenter = (cx, cy) => { const r = stage.getBoundingClientRect(); return [cx - r.left - r.width / 2, cy - r.top - r.height / 2]; };
+      bFit.onclick = () => { view.z = 1; view.ox = 0; view.oy = 0; place(); };
+      stage.addEventListener('wheel', (e) => {
+        if (!e.ctrlKey) return;
+        e.preventDefault();
+        zoomTo(view.z * Math.exp(-e.deltaY * 0.002), ...fromCenter(e.clientX, e.clientY));
+      }, { passive: false });
+
+      // Two fingers: cancel the stroke the first finger started, then pinch/move
+      // the view. Drawing resumes once all fingers are lifted.
+      const fingers = new Set();
+      let pinching = false;
+      let pinch = null;
+      const cancelStroke = () => {
+        if (current && !current.eraser) octx.clearRect(0, 0, d.w, d.h);
+        current = null;
+      };
+      const two = (t) => { const [a, b] = [fromCenter(t[0].clientX, t[0].clientY), fromCenter(t[1].clientX, t[1].clientY)]; return { mx: (a[0] + b[0]) / 2, my: (a[1] + b[1]) / 2, dist: Math.hypot(a[0] - b[0], a[1] - b[1]) || 1 }; };
+      stage.addEventListener('touchstart', (e) => {
+        if (e.touches.length < 2) return;
+        e.preventDefault();
+        pinching = true;
+        cancelStroke();
+        pinch = { ...two(e.touches), z: view.z, ox: view.ox, oy: view.oy };
+      }, { passive: false });
+      stage.addEventListener('touchmove', (e) => {
+        if (!pinching) return;
+        e.preventDefault();
+        if (e.touches.length < 2 || !pinch) return;
+        const now = two(e.touches);
+        zoomTo(pinch.z * (now.dist / pinch.dist), pinch.mx, pinch.my, pinch);
+        view.ox += now.mx - pinch.mx;
+        view.oy += now.my - pinch.my;
+        place();
+      }, { passive: false });
+      const touchUp = (e) => {
+        if (e.touches.length < 2) pinch = null;
+        if (!e.touches.length) { pinching = false; fingers.clear(); }
+      };
+      stage.addEventListener('touchend', touchUp);
+      stage.addEventListener('touchcancel', touchUp);
       const redraw = () => renderAll(ctx, d, baseImg);
       function refreshBar() {
         toolBox.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.tool === tool));
@@ -265,6 +328,8 @@
       let current = null;
       overlay.addEventListener('pointerdown', async (e) => {
         if (e.button !== 0) return;
+        fingers.add(e.pointerId);
+        if (pinching || fingers.size > 1) { pinching = true; cancelStroke(); return; }
         const [x, y] = toCanvas(e);
         if (tool === 'text') {
           const text = await askText();
@@ -287,7 +352,7 @@
         drawCurrent();
       });
       overlay.addEventListener('pointermove', (e) => {
-        if (!current) return;
+        if (!current || pinching) return;
         const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
         if (current.eraser) { for (const ev of events) eraseAt(...toCanvas(ev)); return; }
         if (current.pts) {
@@ -310,8 +375,9 @@
         }
         drawCurrent();
       });
-      const finish = () => {
-        if (!current) return;
+      const finish = (e) => {
+        fingers.delete(e.pointerId);
+        if (!current || pinching) return;
         octx.clearRect(0, 0, d.w, d.h);
         if (!current.eraser) {
           const tiny = !current.pts && Math.hypot(current.x2 - current.x1, current.y2 - current.y1) < 3;
