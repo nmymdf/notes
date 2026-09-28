@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('notesAPI', {
+  version: ipcRenderer.sendSync('app:version'),
   load: () => ipcRenderer.invoke('db:load'),
   save: (db, opts) => ipcRenderer.invoke('db:save', db, opts),
   cleanupImages: () => ipcRenderer.invoke('db:cleanup-images'),

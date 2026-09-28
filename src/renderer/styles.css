@@ -33,6 +33,12 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
   display: flex; flex-direction: column; transition: width .15s;
 }
 #btn-toggle-sidebar { align-self: flex-start; margin-left: 4px; }
+.app-brand { padding: 2px 12px 10px; display: flex; flex-direction: column; gap: 2px; }
+.app-brand b { font-size: 15px; }
+.app-brand b span { color: var(--muted); font-weight: 400; font-size: 13px; }
+.app-brand i { color: var(--muted); font-size: 13px; }
+#sidebar.collapsed .app-brand { display: none; }
+.mobile .app-brand { padding-top: calc(env(safe-area-inset-top) + 14px); }
 #sidebar nav { flex: 1; overflow-y: auto; margin-top: 16px; }
 #sidebar.collapsed { width: 64px; }
 #sidebar.collapsed nav span, #sidebar.collapsed nav em, #sidebar.collapsed .nav-section,
@@ -467,7 +473,7 @@ html:not(.mobile) .mobile-only { display: none !important; }
 .mobile body { -webkit-tap-highlight-color: transparent; }
 .mobile #app { padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); height: 100vh; }
 .mobile #btn-new-voice-note, .mobile #btn-voice, .mobile #btn-voice + i, .mobile #btn-on-top, .mobile #btn-export,
-.mobile #btn-import-outlook, .mobile #btn-undo-import, .mobile #btn-toggle-sidebar { display: none !important; }
+.mobile #btn-import-outlook, .mobile #btn-undo-import, .mobile .sidebar-foot, .mobile #btn-toggle-sidebar { display: none !important; }
 
 /* sidebar becomes a slide-in drawer */
 .mobile #sidebar {

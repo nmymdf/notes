@@ -100,7 +100,7 @@ function createWindow() {
     minHeight: 480,
     show: false,
     backgroundColor: '#000000',
-    title: 'DeskNotes  —  designer: ArchieKuo',
+    title: `DeskNotes ${app.getVersion()}  —  作者: ArchieKUO`,
     icon: path.join(__dirname, '..', 'build', 'icon.png'),
     autoHideMenuBar: true,
     webPreferences: {
@@ -172,6 +172,7 @@ function createTray() {
 // ---------- IPC ----------
 
 function registerIpc() {
+  ipcMain.on('app:version', (e) => { e.returnValue = app.getVersion(); });
   ipcMain.handle('db:load', () => loadDb());
   ipcMain.handle('db:save', (_e, db, opts) => { saveDb(db, opts); return true; });
   ipcMain.handle('db:cleanup-images', () => { cleanupImages(loadDb()); return true; });

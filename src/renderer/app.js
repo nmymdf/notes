@@ -1768,7 +1768,11 @@ function makeZoomable(box) {
   };
 }
 const lightboxZoom = makeZoomable($('#lightbox'));
-if (api.version) $('.sidebar-foot').textContent = `DeskNotes 版本 ${api.version}`;
+// Version and author at the top of the sidebar (the phone's menu) and in the window title.
+if (api.version) {
+  $('#app-version').textContent = api.version;
+  document.title = `DeskNotes ${api.version}  —  作者: ArchieKUO`;
+}
 let lightboxSource = null; // the picture in the note, for 刪除
 function openLightbox(src) {
   const img = $('#lightbox img');
