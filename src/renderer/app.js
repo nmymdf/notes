@@ -1312,7 +1312,9 @@ function openEditor(id) {
   $('#editor-view').classList.remove('hidden');
   $('#note-title').value = n.title;
   editor.innerHTML = n.html;
+  linkify(editor);
   hydrateImages(editor);
+  openedHtml = dehydrateHtml(editor.innerHTML); // linkify alone isn't an edit
   $('#save-state').textContent = '';
   const sel = $('#note-folder');
   sel.innerHTML = '';
@@ -1354,6 +1356,7 @@ function closeEditor() {
   render();
 }
 
+let openedHtml = ''; // the note's HTML as shown when opened
 // Selecting a picture only adds/removes a class; that alone isn't an edit.
 const sameHtml = (a, b) => a.replace(/ class="(selected)?"/g, '') === b.replace(/ class="(selected)?"/g, '');
 
@@ -1362,7 +1365,7 @@ function flushEditor() {
   if (!n) return;
   const html = dehydrateHtml(editor.innerHTML).replace(/ class="selected"/g, '');
   const title = $('#note-title').value;
-  if (sameHtml(n.html, html) && n.title === title) return;
+  if ((sameHtml(n.html, html) || sameHtml(openedHtml, html)) && n.title === title) return;
   n.html = html;
   n.title = title;
   n.text = htmlToText(html);
@@ -1500,6 +1503,7 @@ editor.addEventListener('paste', async (e) => {
   if (text) {
     e.preventDefault();
     document.execCommand('insertText', false, text);
+    linkifyAtCaret();
   }
 });
 
@@ -2006,9 +2010,62 @@ editor.addEventListener('keydown', (e) => {
     onEdited();
   }
 });
+// ----- web addresses in notes become links; a click opens them in the browser.
+const URL_RE = /https?:\/\/[^\s<>"'，。、「」）]+/g;
+const TRAIL_RE = /[.,;:!?)\]}'"]+$/;
+// Turn plain-text addresses under `root` into <a> links. An address that the
+// caret touches is left alone (it may still be being typed).
+function linkify(root, caret = null) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: (t) => (t.parentElement.closest('a') || !/https?:\/\//.test(t.data) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+  });
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  let changed = false;
+  for (const t of nodes) {
+    const text = t.data;
+    const frag = document.createDocumentFragment();
+    let last = 0;
+    let caretAt = null;
+    for (const m of text.matchAll(URL_RE)) {
+      const url = m[0].replace(TRAIL_RE, '');
+      const end = m.index + url.length;
+      if (caret && caret.node === t && caret.offset >= m.index && caret.offset <= end) continue;
+      frag.append(text.slice(last, m.index));
+      const a = document.createElement('a');
+      a.href = url;
+      a.textContent = url;
+      frag.append(a);
+      last = end;
+    }
+    if (!last) continue;
+    const rest = document.createTextNode(text.slice(last));
+    frag.append(rest);
+    if (caret && caret.node === t && caret.offset >= last) caretAt = [rest, caret.offset - last];
+    t.replaceWith(frag);
+    changed = true;
+    if (caretAt) {
+      const r = document.createRange();
+      r.setStart(...caretAt);
+      const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+    }
+  }
+  return changed;
+}
+function linkifyAtCaret() {
+  const s = getSelection();
+  const caret = s.rangeCount && s.anchorNode && s.anchorNode.nodeType === 3 ? { node: s.anchorNode, offset: s.anchorOffset } : null;
+  if (linkify(editor, caret)) onEdited();
+}
+// After a space or Enter the address before it is complete.
+editor.addEventListener('keyup', (e) => { if (e.key === ' ' || e.key === 'Enter' || e.key === 'Tab') linkifyAtCaret(); });
+editor.addEventListener('blur', () => { if (state.currentId) linkifyAtCaret(); });
 editor.addEventListener('click', (e) => {
   const a = e.target.closest('a[href]');
-  if (a && (e.ctrlKey || e.metaKey)) window.open(a.href);
+  if (!a || !/^https?:/i.test(a.getAttribute('href'))) return;
+  e.preventDefault();
+  if (IS_MOBILE) location.assign(a.href); // the app opens it in the phone's browser
+  else window.open(a.href);
 });
 
 $('#note-title').addEventListener('input', onEdited);
