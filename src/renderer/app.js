@@ -572,49 +572,78 @@ function formatSize(n) {
 }
 
 // Pick up files added, changed or deleted directly in File Explorer (computer only).
+// Adding files and scanning the folders on disk must not overlap: dragging
+// files in also focuses the window, and a scan running while the files are
+// being copied would record them a second time.
+let filesLock = Promise.resolve();
+function withFilesLock(fn) {
+  const run = filesLock.then(fn, fn);
+  filesLock = run.catch(() => {});
+  return run;
+}
+
 let scanning = false;
-async function refreshFiles() {
-  if (!api.files || api.files.inApp || scanning) return false;
+function refreshFiles() {
+  if (!api.files || api.files.inApp || scanning) return Promise.resolve(false);
   scanning = true;
-  try {
-    const r = await api.files.scan(db.folders, db.files);
-    if (!r.newFolders.length && !r.missingFolderIds.length && !r.newFiles.length && !r.changedFiles.length && !r.missingFileIds.length) return false;
-    const relOf = (dir) => dir.replace(/\\/g, '/').split('/files/').pop();
-    const dirToId = new Map();
-    for (const f of db.folders.filter((x) => x.kind === 'files')) {
-      const parent = findFolder(f.parentId);
-      dirToId.set(parent ? `${parent.name}/${f.name}` : f.name, f.id);
-    }
-    for (const nf of r.newFolders.sort((a, b) => (a.parentDir ? 1 : 0) - (b.parentDir ? 1 : 0))) {
-      const parentId = nf.parentDir ? dirToId.get(relOf(nf.parentDir)) || null : null;
-      const f = { id: uid(), name: nf.name, kind: 'files', createdAt: Date.now(), parentId, order: childrenOf('db', parentId).length };
-      db.folders.push(f);
-      dirToId.set(relOf(nf.dir), f.id);
-    }
-    const now = Date.now();
-    for (const nf of r.newFiles) {
-      const folderId = dirToId.get(relOf(nf.dir));
-      if (folderId) db.files.push({ id: uid(), name: nf.name, folderId, size: nf.size, mtime: nf.mtime, hash: nf.hash, createdAt: now, deletedAt: null });
-    }
-    for (const c of r.changedFiles) Object.assign(db.files.find((f) => f.id === c.id) || {}, { size: c.size, mtime: c.mtime, hash: c.hash });
-    db.files = db.files.filter((f) => !r.missingFileIds.includes(f.id));
-    db.folders = db.folders.filter((f) => !r.missingFolderIds.includes(f.id));
-    if (r.missingFolderIds.includes(state.view)) state.view = 'all';
-    await persist(true);
-    render();
+  return withFilesLock(scanFiles).finally(() => { scanning = false; });
+}
+// Records pointing at the same file (left by the old double-add bug): keep one.
+function dropDuplicateFiles() {
+  const seen = new Set();
+  const before = db.files.length;
+  db.files = db.files.filter((f) => {
+    if (f.deletedAt) return true;
+    const key = `${f.folderId}|${f.name}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
     return true;
-  } finally {
-    scanning = false;
+  });
+  return db.files.length !== before;
+}
+async function scanFiles() {
+  const deduped = dropDuplicateFiles();
+  const r = await api.files.scan(db.folders, db.files);
+  if (!r.newFolders.length && !r.missingFolderIds.length && !r.newFiles.length && !r.changedFiles.length && !r.missingFileIds.length) {
+    if (deduped) { await persist(true); render(); }
+    return deduped;
   }
+  const relOf = (dir) => dir.replace(/\\/g, '/').split('/files/').pop();
+  const dirToId = new Map();
+  for (const f of db.folders.filter((x) => x.kind === 'files')) {
+    const parent = findFolder(f.parentId);
+    dirToId.set(parent ? `${parent.name}/${f.name}` : f.name, f.id);
+  }
+  for (const nf of r.newFolders.sort((a, b) => (a.parentDir ? 1 : 0) - (b.parentDir ? 1 : 0))) {
+    const parentId = nf.parentDir ? dirToId.get(relOf(nf.parentDir)) || null : null;
+    const f = { id: uid(), name: nf.name, kind: 'files', createdAt: Date.now(), parentId, order: childrenOf('db', parentId).length };
+    db.folders.push(f);
+    dirToId.set(relOf(nf.dir), f.id);
+  }
+  const now = Date.now();
+  for (const nf of r.newFiles) {
+    const folderId = dirToId.get(relOf(nf.dir));
+    if (folderId) db.files.push({ id: uid(), name: nf.name, folderId, size: nf.size, mtime: nf.mtime, hash: nf.hash, createdAt: now, deletedAt: null });
+  }
+  for (const c of r.changedFiles) Object.assign(db.files.find((f) => f.id === c.id) || {}, { size: c.size, mtime: c.mtime, hash: c.hash });
+  db.files = db.files.filter((f) => !r.missingFileIds.includes(f.id));
+  db.folders = db.folders.filter((f) => !r.missingFolderIds.includes(f.id));
+  if (r.missingFolderIds.includes(state.view)) state.view = 'all';
+  await persist(true);
+  render();
+  return true;
 }
 
 async function addFiles(folderId, sources) {
   if (!sources.length) return;
   syncOverlay.show('加入檔案中…');
   try {
-    const { added, skipped } = await api.files.add(db.folders, folderId, sources);
-    db.files.push(...added);
-    await persist(true);
+    const { added, skipped } = await withFilesLock(async () => {
+      const res = await api.files.add(db.folders, folderId, sources);
+      db.files.push(...res.added);
+      await persist(true);
+      return res;
+    });
     render();
     if (skipped.length) openModal({ title: '有檔案太大', text: `單一檔案上限 200 MB，以下檔案沒有加入：\n${skipped.join('\n')}`, okText: '好' });
     else toast(`已加入 ${added.length} 個檔案`);
@@ -1975,9 +2004,13 @@ async function drawOnFile(f) {
   if (res.error) { toast(res.error); return; }
   try {
     const stem = f.name.replace(/\.[^.]+$/, '');
-    const rec = await api.files.addBuffer(db.folders, f.folderId, `${stem}（標註）.png`, await res.blob.arrayBuffer());
-    db.files.push(rec);
-    await persist(true);
+    const buf = await res.blob.arrayBuffer();
+    const rec = await withFilesLock(async () => {
+      const r = await api.files.addBuffer(db.folders, f.folderId, `${stem}（標註）.png`, buf);
+      db.files.push(r);
+      await persist(true);
+      return r;
+    });
     render();
     toast(`已另存為「${rec.name}」`);
   } catch (err) {
