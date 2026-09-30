@@ -755,7 +755,13 @@ async function copyFileToPhone(f) {
       okText: '打開資料夾',
       cancelText: '關閉',
     });
-    if (open) api.files.openPhoneFolder();
+    if (open) {
+      try {
+        await api.files.openPhoneFolder();
+      } catch (err) {
+        openModal({ title: '無法打開資料夾', text: `請打開手機的「檔案」或「我的檔案」App，到 文件（Documents）→ DeskNotes。\n（${err.message || err}）`, okText: '好' });
+      }
+    }
   } catch (err) {
     syncOverlay.hide();
     openModal({ title: '無法複製到手機', text: err.message || String(err), okText: '好' });

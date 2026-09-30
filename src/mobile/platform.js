@@ -7,7 +7,10 @@
 // Locked notes use the same crypto as src/vault.js: scrypt(N=2^17, r=8, p=1)
 // → AES-256-GCM, so the files are interchangeable with the Windows version.
 
-import { Capacitor, CapacitorHttp } from '@capacitor/core';
+import { Capacitor, CapacitorHttp, registerPlugin } from '@capacitor/core';
+
+// Our own small Android plugin (android/.../FolderOpenerPlugin.java).
+const FolderOpener = registerPlugin('FolderOpener');
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { App } from '@capacitor/app';
 import { Share } from '@capacitor/share';
@@ -425,10 +428,9 @@ const filesApi = {
     await Filesystem.copy({ from: `${FILES_DIR}/${file.id}`, to: `${dir}/${name}`, directory: DIR, toDirectory: Directory.Documents });
     return `文件（Documents）/DeskNotes/${name}`;
   },
-  // Open 文件/DeskNotes in the phone's file manager (Android's Files app
-  // understands this address; the app hands it to Android).
-  openPhoneFolder() {
-    location.assign('content://com.android.externalstorage.documents/document/primary%3ADocuments%2FDeskNotes');
+  // Open 文件/DeskNotes in the phone's file manager.
+  async openPhoneFolder() {
+    return FolderOpener.open({ path: 'Documents/DeskNotes' });
   },
   async clearShareCache() {
     try { await Filesystem.rmdir({ path: 'share', directory: Directory.Cache, recursive: true }); } catch { /* none */ }
