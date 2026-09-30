@@ -757,7 +757,9 @@ async function copyFileToPhone(f) {
     });
     if (open) {
       try {
-        await api.files.openPhoneFolder();
+        const r = await api.files.openPhoneFolder();
+        // Which way the phone used (helps if nothing shows up).
+        toast(`打開方式：${r?.opened || '?'}${r?.failed ? `（${r.failed}）` : ''}`);
       } catch (err) {
         openModal({ title: '無法打開資料夾', text: `請打開手機的「檔案」或「我的檔案」App，到 文件（Documents）→ DeskNotes。\n（${err.message || err}）`, okText: '好' });
       }
