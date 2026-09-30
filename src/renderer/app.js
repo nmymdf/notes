@@ -197,7 +197,8 @@ function purgeOldTrash() {
 
 // ---------------------------------------------------------------- modal / menus
 
-function openModal({ title, text = '', input = null, options = null, okText = '確定', danger = false, password = false }) {
+function openModal({ title, text = '', input = null, options = null, okText = '確定', cancelText = '取消', danger = false, password = false }) {
+  $('#modal-cancel').textContent = cancelText;
   return new Promise((resolve) => {
     const modal = $('#modal');
     $('#modal-title').textContent = title;
@@ -748,11 +749,13 @@ async function copyFileToPhone(f) {
   try {
     const where = await api.files.copyToPhone(db.folders, f);
     syncOverlay.hide();
-    openModal({
+    const open = await openModal({
       title: '已複製到手機',
-      text: `${where}\n\n用手機的「檔案管理」就能找到。\n之後如果在 DeskNotes 刪除這個檔案，同步時電腦上的也會移到垃圾筒；複製到手機的這份不受影響。`,
-      okText: '好',
+      text: `${where}\n\n按「打開資料夾」會用手機的檔案 App 打開這個資料夾，可以改名、移動、分享。\n之後如果在 DeskNotes 刪除這個檔案，同步時電腦上的也會移到垃圾筒；複製到手機的這份不受影響。`,
+      okText: '打開資料夾',
+      cancelText: '關閉',
     });
+    if (open) api.files.openPhoneFolder();
   } catch (err) {
     syncOverlay.hide();
     openModal({ title: '無法複製到手機', text: err.message || String(err), okText: '好' });
@@ -787,6 +790,7 @@ function fileContextMenu(e, id) {
         ? [{ label: '複製到手機', action: () => copyFileToPhone(f) }, { label: '分享…', action: () => shareFile(f) }]
         : [
           { label: '在檔案總管中顯示', action: () => api.files.show(db.folders, f) },
+          { label: '複製到桌面…', action: async () => { if (await api.files.saveCopy(db.folders, f)) toast('已存好'); } },
           ...(fileKind(f.name) === 'image' ? [{ label: '畫圖（另存新檔）', action: () => drawOnFile(f) }] : []),
         ]),
       { label: '重新命名', action: () => renameFile(id) },
@@ -1321,6 +1325,7 @@ function noteContextMenu(e, id) {
       { label: n.starred ? '移除最愛' : '加入我的最愛', action: () => { n.starred = !n.starred; persist(); render(); } },
       { label: '移動到資料夾…', action: async () => { if (await moveNotes([id])) render(); } },
       { label: '🔒 移到上鎖筆記', action: async () => { if (await moveToVault([id])) render(); } },
+      ...(IS_MOBILE ? [] : [{ label: '複製到桌面…（存成 .html）', action: () => api.exportNote(noteTitle(n), n.html).then((ok) => ok && toast('已存好')) }]),
       { label: '建立副本', action: () => {
         const now = Date.now();
         db.notes.push({ ...n, id: uid(), title: noteTitle(n) + ' (副本)', createdAt: now, updatedAt: now });
@@ -2403,20 +2408,32 @@ $('#notes').addEventListener('contextmenu', (e) => {
   noteContextMenu(e, card.dataset.id);
 });
 
+// Dropping the item outside the window (desktop, a folder in File Explorer)
+// saves a copy there: Windows fetches it from the given URL.
+function setDragOut(e, mime, name, url) {
+  if (IS_MOBILE) return;
+  const safe = name.replace(/[\\/:*?"<>|]/g, '_');
+  e.dataTransfer.setData('DownloadURL', `${mime}:${safe}:${url}`);
+}
+
 // drag notes onto folders / trash in the sidebar
 $('#notes').addEventListener('dragstart', (e) => {
   const row = e.target.closest('.file-row');
   if (row) {
     const ids = state.selected.has(row.dataset.fileId) ? [...state.selected].filter((id) => !isNoteId(id)) : [row.dataset.fileId];
     e.dataTransfer.setData('application/x-file-ids', JSON.stringify(ids));
-    e.dataTransfer.effectAllowed = 'move';
+    const f = db.files.find((x) => x.id === row.dataset.fileId);
+    if (ids.length === 1 && f) setDragOut(e, 'application/octet-stream', f.name, `note-img://drag-file/${f.id}`);
+    e.dataTransfer.effectAllowed = 'copyMove';
     return;
   }
   const card = e.target.closest('.note-card');
   if (!card) return;
   const ids = state.selected.has(card.dataset.id) ? [...state.selected].filter(isNoteId) : [card.dataset.id];
   e.dataTransfer.setData('application/x-note-ids', JSON.stringify(ids));
-  e.dataTransfer.effectAllowed = 'move';
+  const n = db.notes.find((x) => x.id === card.dataset.id); // not locked notes: they stay encrypted
+  if (ids.length === 1 && n) setDragOut(e, 'text/html', `${noteTitle(n)}.html`, `note-img://drag-note/${n.id}`);
+  e.dataTransfer.effectAllowed = 'copyMove';
 });
 // Files dragged in from File Explorer → add to the open file folder (computer).
 const scrollerList = $('#notes');

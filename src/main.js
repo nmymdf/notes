@@ -73,6 +73,22 @@ function saveImage(buffer, mime, inVault = false) {
   return `${IMG_SCHEME}://img/${name}`;
 }
 
+const safeTitle = (title) => (title || '未命名筆記').replace(/[\\/:*?"<>|]/g, '_').trim().slice(0, 80) || '未命名筆記';
+
+// A note as a self-contained HTML page (pictures inlined), for 匯出 and for
+// dragging a note out to the desktop.
+function noteHtmlDoc(title, html) {
+  const safe = safeTitle(title).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const inlined = (html || '').replace(new RegExp(`${IMG_SCHEME}://img/([\\w.-]+)`, 'g'), (all, file) => {
+    const p = path.join(imagesDir, file);
+    if (!fs.existsSync(p)) return all;
+    return `data:${mimeOf(file)};base64,${fs.readFileSync(p).toString('base64')}`;
+  });
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${safe}</title>
+<style>body{font-family:"Microsoft JhengHei",sans-serif;max-width:860px;margin:40px auto;line-height:1.6}img{max-width:100%}</style>
+</head><body><h1>${safe}</h1>${inlined}</body></html>`;
+}
+
 function imageRefs(html) {
   const refs = new Set();
   const re = new RegExp(`${IMG_SCHEME}://img/([\\w.-]+)`, 'g');
@@ -243,25 +259,23 @@ function registerIpc() {
   });
 
   ipcMain.handle('note:export', async (_e, { title, html }) => {
-    const safe = (title || '未命名筆記').replace(/[\\/:*?"<>|]/g, '_');
     const res = await dialog.showSaveDialog(mainWindow, {
       title: '匯出筆記',
-      defaultPath: `${safe}.html`,
+      defaultPath: path.join(app.getPath('desktop'), `${safeTitle(title)}.html`),
       filters: [{ name: 'HTML', extensions: ['html'] }],
     });
     if (res.canceled || !res.filePath) return false;
-    // Inline images so the exported file is self-contained.
-    const inlined = html.replace(new RegExp(`${IMG_SCHEME}://img/([\\w.-]+)`, 'g'), (all, file) => {
-      const p = path.join(imagesDir, file);
-      if (!fs.existsSync(p)) return all;
-      const ext = path.extname(file).slice(1);
-      const mime = Object.keys(EXT_BY_MIME).find((k) => EXT_BY_MIME[k] === ext) || 'image/png';
-      return `data:${mime};base64,${fs.readFileSync(p).toString('base64')}`;
+    fs.writeFileSync(res.filePath, noteHtmlDoc(title, html), 'utf8');
+    return true;
+  });
+  // 複製到桌面…: save a copy of a file from a folder (desktop suggested).
+  ipcMain.handle('files:save-copy', async (_e, folders, file) => {
+    const res = await dialog.showSaveDialog(mainWindow, {
+      title: '複製到…',
+      defaultPath: path.join(app.getPath('desktop'), file.name),
     });
-    const doc = `<!doctype html><html><head><meta charset="utf-8"><title>${safe}</title>
-<style>body{font-family:"Microsoft JhengHei",sans-serif;max-width:860px;margin:40px auto;line-height:1.6}img{max-width:100%}</style>
-</head><body><h1>${safe}</h1>${inlined}</body></html>`;
-    fs.writeFileSync(res.filePath, doc, 'utf8');
+    if (res.canceled || !res.filePath) return false;
+    fs.copyFileSync(fileStore.contentPath(folders, file), res.filePath);
     return true;
   });
 
@@ -366,6 +380,19 @@ if (!app.requestSingleInstanceLock()) {
     protocol.handle(IMG_SCHEME, (req) => {
       const url = new URL(req.url);
       const file = path.basename(decodeURIComponent(url.pathname));
+      // Dragging a note / file out of the window: Windows fetches it from here.
+      if (url.host === 'drag-note' || url.host === 'drag-file') {
+        const db = loadDb();
+        if (url.host === 'drag-note') {
+          const n = db.notes.find((x) => x.id === file);
+          if (!n) return new Response('not found', { status: 404 });
+          return new Response(noteHtmlDoc(n.title || (n.text || '').split('\n')[0], n.html), { headers: { 'content-type': 'text/html; charset=utf-8' } });
+        }
+        const f = (db.files || []).find((x) => x.id === file);
+        const p = f && fileStore.contentPath(db.folders, f);
+        if (!p || !fs.existsSync(p)) return new Response('not found', { status: 404 });
+        return net.fetch(pathToFileURL(p).toString());
+      }
       if (url.host === 'vault') {
         const plain = vault.readImage(file);
         if (!plain) return new Response('locked', { status: 403 });

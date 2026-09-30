@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('notesAPI', {
     materialize: (before, after, preserve) => ipcRenderer.invoke('files:materialize', before, after, preserve),
     open: (folders, file) => ipcRenderer.invoke('files:open', folders, file),
     show: (folders, file) => ipcRenderer.invoke('files:show', folders, file),
+    saveCopy: (folders, file) => ipcRenderer.invoke('files:save-copy', folders, file),
     openFolder: (folders, folderId) => ipcRenderer.invoke('files:open-folder', folders, folderId),
     pathOf: (file) => webUtils.getPathForFile(file),
   },

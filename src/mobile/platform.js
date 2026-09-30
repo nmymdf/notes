@@ -425,6 +425,11 @@ const filesApi = {
     await Filesystem.copy({ from: `${FILES_DIR}/${file.id}`, to: `${dir}/${name}`, directory: DIR, toDirectory: Directory.Documents });
     return `文件（Documents）/DeskNotes/${name}`;
   },
+  // Open 文件/DeskNotes in the phone's file manager (Android's Files app
+  // understands this address; the app hands it to Android).
+  openPhoneFolder() {
+    location.assign('content://com.android.externalstorage.documents/document/primary%3ADocuments%2FDeskNotes');
+  },
   async clearShareCache() {
     try { await Filesystem.rmdir({ path: 'share', directory: Directory.Cache, recursive: true }); } catch { /* none */ }
   },
