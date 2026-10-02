@@ -11,6 +11,7 @@ const { Vault } = require('./vault');
 const { readOutlookCsv } = require('./outlook-import');
 const { SyncServer } = require('./sync-server');
 const { FileStore } = require('./files-store');
+const { Backups } = require('./backup');
 
 const IMG_SCHEME = 'note-img';
 const QUICK_NOTE_SHORTCUT = 'CommandOrControl+Alt+N';
@@ -25,6 +26,8 @@ let dbFile;
 let vault;
 let syncServer;
 let fileStore;
+let backups;
+const backupVaults = new Map(); // backup id → opened Vault (while finding notes)
 let mainWindow = null;
 let tray = null;
 let quitting = false;
@@ -300,6 +303,49 @@ Add-Type -Namespace W -Name K -MemberDefinition '[DllImport("user32.dll")] publi
     });
   });
 
+  // ----- backups (see backup.js)
+  ipcMain.handle('backups:list', () => backups.list());
+  ipcMain.handle('backups:create', (_e, kind) => backups.create(kind));
+  ipcMain.handle('backups:read-db', (_e, id) => backups.readDb(id));
+  ipcMain.handle('backups:restore-images', (_e, id, names) => { backups.restoreImages(id, names, imagesDir); return true; });
+  // Locked notes of a backup: with the open vault's key (same password), or a password.
+  ipcMain.handle('backups:open-vault', async (_e, id, password) => {
+    const bv = new Vault(backups.pathOf(id));
+    if (!bv.exists()) return { notes: [], folders: [] };
+    let payload = vault.unlocked ? bv.unlockWithKey(vault.key) : null;
+    if (!payload && password) payload = await bv.unlock(password);
+    if (!payload) return { needPassword: true };
+    backupVaults.set(id, bv);
+    return payload;
+  });
+  // Pictures of found locked notes: decrypt from the backup, encrypt into the open vault.
+  ipcMain.handle('backups:restore-vault-images', (_e, id, names) => {
+    const bv = backupVaults.get(id);
+    if (!bv || !vault.unlocked) throw new Error('上鎖筆記沒有開啟');
+    for (const name of names) {
+      const file = path.basename(name);
+      if (fs.existsSync(path.join(vault.imagesDir, file))) continue;
+      const plain = bv.readImage(file);
+      if (plain) vault.saveImage(file, plain);
+    }
+    return true;
+  });
+  ipcMain.handle('backups:close', (_e, id) => {
+    const bv = backupVaults.get(id);
+    if (bv) { bv.lastNotes = null; bv.lock(); backupVaults.delete(id); }
+    return true;
+  });
+  // 備份檔案…: copy all files of the file folders to a place the user picks.
+  ipcMain.handle('files:backup', async () => {
+    const res = await dialog.showOpenDialog(mainWindow, { title: '選擇要把檔案備份到哪裡', properties: ['openDirectory', 'createDirectory'] });
+    if (res.canceled || !res.filePaths.length) return null;
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const dest = path.join(res.filePaths[0], `DeskNotes 檔案備份 ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}${pad(d.getMinutes())}`);
+    await fs.promises.cp(fileStore.root, dest, { recursive: true });
+    return dest;
+  });
+
   // ----- file folders (see files-store.js)
   ipcMain.handle('files:scan', (_e, folders, files) => fileStore.scan(folders, files));
   ipcMain.handle('files:pick', async () => {
@@ -367,6 +413,10 @@ if (!app.requestSingleInstanceLock()) {
 
     vault = new Vault(dataDir);
     fileStore = new FileStore(dataDir);
+    backups = new Backups(dataDir);
+    const daily = () => { try { backups.ensureDaily(); } catch (err) { console.error('backup failed', err); } };
+    daily();
+    setInterval(daily, 60 * 60 * 1000); // DeskNotes often stays open in the tray for days
     syncServer = new SyncServer({
       dataDir,
       fileStore,
@@ -374,6 +424,8 @@ if (!app.requestSingleInstanceLock()) {
       vaultImagesDir: vault.imagesDir,
       vaultFile: vault.file,
       askRenderer,
+      // Every phone sync can delete or replace notes: back up first.
+      beforeApply: () => { try { backups.create('sync'); } catch (err) { console.error('backup failed', err); } },
       onEvent: (evt) => mainWindow && mainWindow.webContents.send('sync:event', evt),
     });
 

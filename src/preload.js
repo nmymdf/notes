@@ -19,6 +19,17 @@ contextBridge.exposeInMainWorld('notesAPI', {
     exportImages: (html) => ipcRenderer.invoke('vault:export-images', html),
   },
   importOutlook: () => ipcRenderer.invoke('import:outlook'),
+  // Backups of the notes (computer only, see src/backup.js).
+  backups: {
+    list: () => ipcRenderer.invoke('backups:list'),
+    create: (kind) => ipcRenderer.invoke('backups:create', kind),
+    readDb: (id) => ipcRenderer.invoke('backups:read-db', id),
+    restoreImages: (id, names) => ipcRenderer.invoke('backups:restore-images', id, names),
+    openVault: (id, password) => ipcRenderer.invoke('backups:open-vault', id, password),
+    restoreVaultImages: (id, names) => ipcRenderer.invoke('backups:restore-vault-images', id, names),
+    close: (id) => ipcRenderer.invoke('backups:close', id),
+    backupFiles: () => ipcRenderer.invoke('files:backup'),
+  },
   exportNote: (title, html) => ipcRenderer.invoke('note:export', { title, html }),
   startVoice: () => ipcRenderer.invoke('voice:start'),
   toggleOnTop: () => ipcRenderer.invoke('window:toggle-on-top'),

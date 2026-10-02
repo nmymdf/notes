@@ -2908,6 +2908,91 @@ $('#btn-empty-trash').addEventListener('click', async () => {
   api.cleanupImages();
   render();
 });
+// ----- 從備份找回筆記 (computer): add back notes that exist in a backup but are
+// gone now. Nothing that exists now is changed.
+async function recoverFromBackup() {
+  const list = await api.backups.list();
+  if (!list.length) {
+    openModal({ title: '還沒有備份', text: 'DeskNotes 每天第一次打開時，以及每次和手機同步前，會自動備份筆記。', okText: '好' });
+    return;
+  }
+  const id = await openModal({
+    title: '從備份找回筆記',
+    text: '選一個備份。只會把「現在不見的筆記」加回來，現有的筆記不會被改變。',
+    options: list.map((b) => ({ value: b.id, label: `${b.label}　${b.notes} 則` })),
+    okText: '下一步',
+  });
+  if (!id) return;
+  const backup = list.find((b) => b.id === id);
+  const old = await api.backups.readDb(id);
+  const have = new Set([...db.notes, ...vault.notes].map((n) => n.id));
+  const missing = (old.notes || []).filter((n) => !n.deletedAt && !have.has(n.id));
+  let lockedMissing = [];
+  let lockedNote = '';
+  if (backup.hasVault) {
+    if (!vault.unlocked) {
+      lockedNote = '\n（上鎖筆記沒有檢查：要找回上鎖筆記，請先解鎖再做一次。）';
+    } else {
+      let res = await api.backups.openVault(id, null);
+      if (res.needPassword) {
+        const pw = await openModal({ title: '輸入備份當時的上鎖筆記密碼', text: '這個備份的上鎖筆記是用不同的密碼加密的。', input: '', password: true, okText: '確定' });
+        res = pw ? await api.backups.openVault(id, pw) : res;
+      }
+      if (res.needPassword) lockedNote = '\n（密碼不對，上鎖筆記沒有檢查。）';
+      else lockedMissing = res.notes.filter((n) => !n.deletedAt && !have.has(n.id));
+    }
+  }
+  try {
+    const total = missing.length + lockedMissing.length;
+    if (!total) {
+      openModal({ title: '沒有不見的筆記', text: `這個備份裡的筆記，現在都還在。可以試試更早的備份。${lockedNote}`, okText: '好' });
+      return;
+    }
+    const titles = [...missing, ...lockedMissing].slice(0, 12).map((n) => `・${noteTitle(n)}`).join('\n');
+    const ok = await openModal({
+      title: `找到 ${total} 則現在不見的筆記`,
+      text: `${missing.length ? `一般筆記 ${missing.length} 則` : ''}${missing.length && lockedMissing.length ? '、' : ''}${lockedMissing.length ? `上鎖筆記 ${lockedMissing.length} 則` : ''}\n${titles}${total > 12 ? '\n…' : ''}${lockedNote}`,
+      okText: '找回',
+    });
+    if (!ok) return;
+    await api.backups.create('restore'); // in case this isn't what was wanted
+    const now = Date.now();
+    if (missing.length) {
+      await api.backups.restoreImages(id, [...SyncMerge.imageRefs(missing, 'img')]);
+      for (const n of missing) {
+        db.notes.push({ ...n, folderId: findFolder(n.folderId) && folderScope(n.folderId) === 'db' ? n.folderId : null, rev: now });
+        if (db.tombstones) delete db.tombstones[n.id];
+      }
+    }
+    if (lockedMissing.length) {
+      await api.backups.restoreVaultImages(id, [...SyncMerge.imageRefs(lockedMissing, 'vault')]);
+      for (const n of lockedMissing) {
+        vault.notes.push({ ...n, folderId: vault.folders.some((f) => f.id === n.folderId) ? n.folderId : null, rev: now });
+        if (vault.tombstones) delete vault.tombstones[n.id];
+      }
+    }
+    await persist(true);
+    render();
+    toast(`已找回 ${total} 則筆記`);
+  } finally {
+    api.backups.close(id);
+  }
+}
+if (api.backups) {
+  $('#btn-recover').addEventListener('click', recoverFromBackup);
+  $('#btn-backup-files').addEventListener('click', async () => {
+    syncOverlay.show('備份檔案中…');
+    try {
+      const dest = await api.backups.backupFiles();
+      syncOverlay.hide();
+      if (dest) openModal({ title: '檔案備份好了', text: dest, okText: '好' });
+    } catch (err) {
+      syncOverlay.hide();
+      openModal({ title: '備份失敗', text: err.message || String(err), okText: '好' });
+    }
+  });
+}
+
 $('#btn-add-files').addEventListener('click', async () => addFiles(state.view, await api.files.pick()));
 $('#btn-open-dir').addEventListener('click', () => api.files.openFolder(db.folders, state.view));
 const LAYOUTS = [

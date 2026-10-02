@@ -99,6 +99,21 @@ class Vault {
     return { notes: body.notes || [], folders: body.folders || [], tombstones: body.tombstones || {} };
   }
 
+  // Open with a key that is already derived (a backup made with the same
+  // password and salt as the open vault). Returns the payload or null.
+  unlockWithKey(key) {
+    try {
+      const env = this.readEnvelope();
+      const plain = Vault.decrypt(key, env.iv, env.tag, env.data);
+      this.key = Buffer.from(key);
+      this.meta = { N: env.N, r: env.r, p: env.p, salt: env.salt };
+      const body = JSON.parse(plain.toString('utf8'));
+      return { notes: body.notes || [], folders: body.folders || [], tombstones: body.tombstones || {} };
+    } catch {
+      return null;
+    }
+  }
+
   lock() {
     // Unreferenced images are only removed here, after the renderer's final
     // save, so an image that was just written but not yet saved in a note survives.
@@ -124,7 +139,9 @@ class Vault {
     for (const file of fs.readdirSync(this.imagesDir)) {
       const p = path.join(this.imagesDir, file);
       const plain = this.readImageWith(oldKey, p);
-      fs.writeFileSync(p, Vault.packImage(newKey, plain));
+      // Write a new file and swap it in: backups may share the old file (see backup.js).
+      fs.writeFileSync(`${p}.tmp`, Vault.packImage(newKey, plain));
+      fs.renameSync(`${p}.tmp`, p);
     }
     this.writePayload(payload, newKey, meta);
     fs.rmSync(`${this.file}.bak`, { force: true });

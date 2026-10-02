@@ -219,6 +219,7 @@ class SyncServer {
         this.fileStore.writeIncoming(safeName(payload.id), payload.offset, Buffer.from(payload.data, 'base64'), payload.final);
         return { ok: true };
       case 'apply': {
+        if (this.beforeApply) this.beforeApply();
         if (payload.vault) {
           const tmp = `${this.vaultFile}.tmp`;
           fs.writeFileSync(tmp, payload.vault);
