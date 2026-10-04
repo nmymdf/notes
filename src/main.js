@@ -76,7 +76,14 @@ function saveImage(buffer, mime, inVault = false) {
   return `${IMG_SCHEME}://img/${name}`;
 }
 
-const safeTitle = (title) => (title || '未命名筆記').replace(/[\\/:*?"<>|]/g, '_').trim().slice(0, 80) || '未命名筆記';
+// A note title usable as a Windows file name: no \\ / : * ? " < > |, no control
+// characters (line breaks, tabs from imported notes), no trailing dots or
+// spaces, not a reserved name like CON or NUL.
+function safeTitle(title) {
+  let s = String(title || '').replace(/[\\/:*?"<>|\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80).replace(/[. ]+$/, '');
+  if (/^(con|prn|aux|nul|com\d|lpt\d)$/i.test(s)) s += '_';
+  return s || '未命名筆記';
+}
 
 // A note as a self-contained HTML page (pictures inlined), for 匯出 and for
 // dragging a note out to the desktop.
@@ -346,6 +353,9 @@ Add-Type -Namespace W -Name K -MemberDefinition '[DllImport("user32.dll")] publi
     const pad = (n) => String(n).padStart(2, '0');
     let dest = path.join(res.filePaths[0], `DeskNotes 備份 ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}${pad(d.getMinutes())}`);
     for (let i = 2; fs.existsSync(dest); i++) dest = dest.replace(/( \(\d+\))?$/, ` (${i})`);
+    // Most important first: the data 從備份找回筆記 needs, then the files.
+    backups.copyNotesData(path.join(dest, '還原用資料'), false);
+    if (fs.existsSync(fileStore.root)) await fs.promises.cp(fileStore.root, path.join(dest, '檔案'), { recursive: true });
     const db = loadDb();
     const notesDir = path.join(dest, '筆記');
     const dirOf = (id) => {
@@ -355,26 +365,30 @@ Add-Type -Namespace W -Name K -MemberDefinition '[DllImport("user32.dll")] publi
       return p ? path.join(notesDir, safeSegment(p.name), safeSegment(f.name)) : path.join(notesDir, safeSegment(f.name));
     };
     let count = 0;
+    const failed = [];
     for (const n of db.notes.filter((x) => !x.deletedAt)) {
       const title = (n.title || '').trim() || (n.text || '').split('\n').find((l) => l.trim())?.trim() || '未命名筆記';
-      const dir = dirOf(n.folderId);
-      fs.mkdirSync(dir, { recursive: true });
-      let name = `${safeTitle(title)}.html`;
-      for (let i = 2; fs.existsSync(path.join(dir, name)); i++) name = `${safeTitle(title)} (${i}).html`;
-      fs.writeFileSync(path.join(dir, name), noteHtmlDoc(title, n.html), 'utf8');
-      count++;
+      try {
+        const dir = dirOf(n.folderId);
+        fs.mkdirSync(dir, { recursive: true });
+        let name = `${safeTitle(title)}.html`;
+        for (let i = 2; fs.existsSync(path.join(dir, name)); i++) name = `${safeTitle(title)} (${i}).html`;
+        fs.writeFileSync(path.join(dir, name), noteHtmlDoc(title, n.html), 'utf8');
+        count++;
+      } catch (err) {
+        failed.push(`${safeTitle(title)}：${err.code || err.message}`); // keep going: one odd note must not stop the backup
+      }
     }
-    if (fs.existsSync(fileStore.root)) await fs.promises.cp(fileStore.root, path.join(dest, '檔案'), { recursive: true });
-    backups.copyNotesData(path.join(dest, '還原用資料'), false);
     fs.writeFileSync(path.join(dest, '說明.txt'), [
       `DeskNotes 備份（${count} 則筆記）`,
+      ...(failed.length ? ['', `有 ${failed.length} 則沒辦法存成 .html（在「還原用資料」裡還是有）：`, ...failed] : []),
       '',
       '筆記：每則筆記一個 .html 檔，用瀏覽器打開就能看（含圖片）。上鎖筆記不在這裡。',
       '檔案：資料夾裡的檔案。',
       '還原用資料：給 DeskNotes「從備份找回筆記…」→「從其他位置選擇備份」用的，上鎖筆記在裡面，一樣加密。請不要修改。',
       '',
     ].join('\r\n'), 'utf8');
-    return { dest, count };
+    return { dest, count, failed: failed.length };
   });
   // A backup made by 備份全部… (e.g. on a USB stick), for 從備份找回筆記.
   ipcMain.handle('backups:pick-external', async () => {

@@ -2989,7 +2989,7 @@ if (api.backups) {
     try {
       const r = await api.backups.backupAll();
       syncOverlay.hide();
-      if (r) openModal({ title: '備份好了', text: `${r.dest}\n\n筆記：${r.count} 則（每則一個 .html，用瀏覽器就能看）\n檔案：資料夾裡的所有檔案\n還原用資料：之後可以用「從備份找回筆記」→「從其他位置選擇備份」找回筆記（含上鎖筆記）`, okText: '好' });
+      if (r) openModal({ title: '備份好了', text: `${r.dest}\n\n筆記：${r.count} 則${r.failed ? `（另有 ${r.failed} 則沒辦法存成 .html，請看 說明.txt）` : ''}（每則一個 .html，用瀏覽器就能看）\n檔案：資料夾裡的所有檔案\n還原用資料：之後可以用「從備份找回筆記」→「從其他位置選擇備份」找回筆記（含上鎖筆記）`, okText: '好' });
     } catch (err) {
       syncOverlay.hide();
       openModal({ title: '備份失敗', text: err.message || String(err), okText: '好' });

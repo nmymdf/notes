@@ -1,7 +1,7 @@
 {
   "name": "desk-notes",
   "productName": "DeskNotes",
-  "version": "2.3.1",
+  "version": "2.3.2",
   "description": "Windows 桌面筆記：隨時記事、貼圖、資料夾、搜尋、垃圾筒",
   "main": "src/main.js",
   "author": "nmymdf",
