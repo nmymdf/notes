@@ -10,7 +10,7 @@ const { execFile } = require('child_process');
 const { Vault } = require('./vault');
 const { readOutlookCsv } = require('./outlook-import');
 const { SyncServer } = require('./sync-server');
-const { FileStore } = require('./files-store');
+const { FileStore, safeSegment } = require('./files-store');
 const { Backups } = require('./backup');
 
 const IMG_SCHEME = 'note-img';
@@ -335,15 +335,56 @@ Add-Type -Namespace W -Name K -MemberDefinition '[DllImport("user32.dll")] publi
     if (bv) { bv.lastNotes = null; bv.lock(); backupVaults.delete(id); }
     return true;
   });
-  // 備份檔案…: copy all files of the file folders to a place the user picks.
-  ipcMain.handle('files:backup', async () => {
-    const res = await dialog.showOpenDialog(mainWindow, { title: '選擇要把檔案備份到哪裡', properties: ['openDirectory', 'createDirectory'] });
+  // 備份全部…: everything into a folder the user picks (e.g. a USB stick):
+  //   筆記/        every note as a readable .html page, in its folders
+  //   檔案/        the files of the folders
+  //   還原用資料/   what 從備份找回筆記 reads (locked notes stay encrypted)
+  ipcMain.handle('backup:all', async () => {
+    const res = await dialog.showOpenDialog(mainWindow, { title: '選擇要備份到哪裡（例如隨身碟）', properties: ['openDirectory', 'createDirectory'] });
     if (res.canceled || !res.filePaths.length) return null;
     const d = new Date();
     const pad = (n) => String(n).padStart(2, '0');
-    const dest = path.join(res.filePaths[0], `DeskNotes 檔案備份 ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}${pad(d.getMinutes())}`);
-    await fs.promises.cp(fileStore.root, dest, { recursive: true });
-    return dest;
+    let dest = path.join(res.filePaths[0], `DeskNotes 備份 ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}${pad(d.getMinutes())}`);
+    for (let i = 2; fs.existsSync(dest); i++) dest = dest.replace(/( \(\d+\))?$/, ` (${i})`);
+    const db = loadDb();
+    const notesDir = path.join(dest, '筆記');
+    const dirOf = (id) => {
+      const f = db.folders.find((x) => x.id === id);
+      if (!f) return notesDir;
+      const p = f.parentId && db.folders.find((x) => x.id === f.parentId);
+      return p ? path.join(notesDir, safeSegment(p.name), safeSegment(f.name)) : path.join(notesDir, safeSegment(f.name));
+    };
+    let count = 0;
+    for (const n of db.notes.filter((x) => !x.deletedAt)) {
+      const title = (n.title || '').trim() || (n.text || '').split('\n').find((l) => l.trim())?.trim() || '未命名筆記';
+      const dir = dirOf(n.folderId);
+      fs.mkdirSync(dir, { recursive: true });
+      let name = `${safeTitle(title)}.html`;
+      for (let i = 2; fs.existsSync(path.join(dir, name)); i++) name = `${safeTitle(title)} (${i}).html`;
+      fs.writeFileSync(path.join(dir, name), noteHtmlDoc(title, n.html), 'utf8');
+      count++;
+    }
+    if (fs.existsSync(fileStore.root)) await fs.promises.cp(fileStore.root, path.join(dest, '檔案'), { recursive: true });
+    backups.copyNotesData(path.join(dest, '還原用資料'), false);
+    fs.writeFileSync(path.join(dest, '說明.txt'), [
+      `DeskNotes 備份（${count} 則筆記）`,
+      '',
+      '筆記：每則筆記一個 .html 檔，用瀏覽器打開就能看（含圖片）。上鎖筆記不在這裡。',
+      '檔案：資料夾裡的檔案。',
+      '還原用資料：給 DeskNotes「從備份找回筆記…」→「從其他位置選擇備份」用的，上鎖筆記在裡面，一樣加密。請不要修改。',
+      '',
+    ].join('\r\n'), 'utf8');
+    return { dest, count };
+  });
+  // A backup made by 備份全部… (e.g. on a USB stick), for 從備份找回筆記.
+  ipcMain.handle('backups:pick-external', async () => {
+    const res = await dialog.showOpenDialog(mainWindow, { title: '選擇「DeskNotes 備份」資料夾', properties: ['openDirectory'] });
+    if (res.canceled || !res.filePaths.length) return null;
+    const dir = Backups.externalDir(res.filePaths[0]);
+    if (!dir) return { error: '這個資料夾裡沒有 DeskNotes 的備份。請選擇「DeskNotes 備份 …」那個資料夾。' };
+    let notes = 0;
+    try { notes = JSON.parse(fs.readFileSync(path.join(dir, 'notes.json'), 'utf8')).notes.filter((n) => !n.deletedAt).length; } catch { /* empty */ }
+    return { id: `ext:${res.filePaths[0]}`, label: path.basename(res.filePaths[0]), notes, hasVault: fs.existsSync(path.join(dir, 'vault.enc')) };
   });
 
   // ----- file folders (see files-store.js)

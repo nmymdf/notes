@@ -38,20 +38,33 @@ class Backups {
     const dest = path.join(this.dir, id);
     const part = `${dest}.part`;
     fs.rmSync(part, { recursive: true, force: true });
-    fs.mkdirSync(part, { recursive: true });
-    for (const name of ['notes.json', 'vault.enc']) {
-      const src = path.join(this.dataDir, name);
-      if (fs.existsSync(src)) fs.copyFileSync(src, path.join(part, name));
-    }
-    for (const [sub, copy] of [['images', linkOrCopy], ['vault-images', fs.copyFileSync]]) {
-      const src = path.join(this.dataDir, sub);
-      if (!fs.existsSync(src)) continue;
-      fs.mkdirSync(path.join(part, sub));
-      for (const f of fs.readdirSync(src)) copy(path.join(src, f), path.join(part, sub, f));
-    }
+    this.copyNotesData(part, true);
     fs.renameSync(part, dest); // a backup only counts once it is complete
     this.prune();
     return id;
+  }
+
+  // The notes data (what 從備份找回筆記 needs) into `dest`. `link`: pictures as
+  // hard links (same disk); otherwise real copies (e.g. onto a USB stick).
+  copyNotesData(dest, link) {
+    fs.mkdirSync(dest, { recursive: true });
+    for (const name of ['notes.json', 'vault.enc']) {
+      const src = path.join(this.dataDir, name);
+      if (fs.existsSync(src)) fs.copyFileSync(src, path.join(dest, name));
+    }
+    for (const [sub, copy] of [['images', link ? linkOrCopy : fs.copyFileSync], ['vault-images', fs.copyFileSync]]) {
+      const src = path.join(this.dataDir, sub);
+      if (!fs.existsSync(src)) continue;
+      fs.mkdirSync(path.join(dest, sub), { recursive: true });
+      for (const f of fs.readdirSync(src)) copy(path.join(src, f), path.join(dest, sub, f));
+    }
+  }
+
+  // A backup made with 備份全部… somewhere else (picked folder): its 還原用資料
+  // folder, or the folder itself if it holds notes.json.
+  static externalDir(dir) {
+    for (const d of [path.join(dir, '還原用資料'), dir]) if (fs.existsSync(path.join(d, 'notes.json'))) return d;
+    return null;
   }
 
   // One backup a day, made on the first start of the day.
@@ -92,6 +105,11 @@ class Backups {
   }
 
   pathOf(id) {
+    if (id.startsWith('ext:')) {
+      const d = Backups.externalDir(id.slice(4));
+      if (!d) throw new Error('這個資料夾裡沒有 DeskNotes 的備份');
+      return d;
+    }
     if (!this.ids().includes(id)) throw new Error('找不到這個備份');
     return path.join(this.dir, id);
   }

@@ -2912,18 +2912,20 @@ $('#btn-empty-trash').addEventListener('click', async () => {
 // gone now. Nothing that exists now is changed.
 async function recoverFromBackup() {
   const list = await api.backups.list();
-  if (!list.length) {
-    openModal({ title: '還沒有備份', text: 'DeskNotes 每天第一次打開時，以及每次和手機同步前，會自動備份筆記。', okText: '好' });
-    return;
-  }
-  const id = await openModal({
+  let id = await openModal({
     title: '從備份找回筆記',
-    text: '選一個備份。只會把「現在不見的筆記」加回來，現有的筆記不會被改變。',
-    options: list.map((b) => ({ value: b.id, label: `${b.label}　${b.notes} 則` })),
+    text: `選一個備份。只會把「現在不見的筆記」加回來，現有的筆記不會被改變。${list.length ? '' : '\n（電腦裡還沒有自動備份：每天第一次打開時，以及每次和手機同步前會自動備份。）'}`,
+    options: [...list.map((b) => ({ value: b.id, label: `${b.label}　${b.notes} 則` })), { value: '__pick__', label: '從其他位置（例如隨身碟）選擇備份…' }],
     okText: '下一步',
   });
   if (!id) return;
-  const backup = list.find((b) => b.id === id);
+  let backup = list.find((b) => b.id === id);
+  if (id === '__pick__') {
+    backup = await api.backups.pickExternal();
+    if (!backup) return;
+    if (backup.error) { openModal({ title: '找不到備份', text: backup.error, okText: '好' }); return; }
+    id = backup.id;
+  }
   const old = await api.backups.readDb(id);
   const have = new Set([...db.notes, ...vault.notes].map((n) => n.id));
   const missing = (old.notes || []).filter((n) => !n.deletedAt && !have.has(n.id));
@@ -2980,12 +2982,14 @@ async function recoverFromBackup() {
 }
 if (api.backups) {
   $('#btn-recover').addEventListener('click', recoverFromBackup);
-  $('#btn-backup-files').addEventListener('click', async () => {
-    syncOverlay.show('備份檔案中…');
+  $('#btn-backup-all').addEventListener('click', async () => {
+    flushEditor();
+    await persist(true); // the backup reads what is saved
+    syncOverlay.show('備份中…');
     try {
-      const dest = await api.backups.backupFiles();
+      const r = await api.backups.backupAll();
       syncOverlay.hide();
-      if (dest) openModal({ title: '檔案備份好了', text: dest, okText: '好' });
+      if (r) openModal({ title: '備份好了', text: `${r.dest}\n\n筆記：${r.count} 則（每則一個 .html，用瀏覽器就能看）\n檔案：資料夾裡的所有檔案\n還原用資料：之後可以用「從備份找回筆記」→「從其他位置選擇備份」找回筆記（含上鎖筆記）`, okText: '好' });
     } catch (err) {
       syncOverlay.hide();
       openModal({ title: '備份失敗', text: err.message || String(err), okText: '好' });
