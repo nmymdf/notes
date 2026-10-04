@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('notesAPI', {
     restoreVaultImages: (id, names) => ipcRenderer.invoke('backups:restore-vault-images', id, names),
     close: (id) => ipcRenderer.invoke('backups:close', id),
     backupAll: () => ipcRenderer.invoke('backup:all'),
+    chooseDir: () => ipcRenderer.invoke('backup:choose-dir'),
     pickExternal: () => ipcRenderer.invoke('backups:pick-external'),
   },
   exportNote: (title, html) => ipcRenderer.invoke('note:export', { title, html }),

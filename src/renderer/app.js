@@ -2651,10 +2651,71 @@ function newFolderMenu(e) {
   newFolder('db', null);
 }
 $('#btn-new-folder').addEventListener('click', (e) => { e.stopPropagation(); newFolderMenu(e); });
+// ----- 系統 menu (everything at the bottom except the trash)
+function toggleSystemMenu(show = $('#system-menu').classList.contains('hidden')) {
+  const menu = $('#system-menu');
+  const btn = $('#btn-system');
+  menu.classList.toggle('hidden', !show);
+  btn.classList.toggle('open', show);
+  if (!show) return;
+  const s = $('#sidebar').getBoundingClientRect();
+  const b = btn.getBoundingClientRect();
+  menu.style.bottom = `${s.bottom - b.top + 6}px`;
+}
+$('#btn-system').addEventListener('click', (e) => { e.stopPropagation(); toggleSystemMenu(); });
+$('#system-menu').addEventListener('click', (e) => { if (e.target.closest('button')) setTimeout(() => toggleSystemMenu(false), 0); });
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('#system-menu, #btn-system') && !$('#system-menu').classList.contains('hidden')) toggleSystemMenu(false);
+});
+
+// ----- drag the sidebar's right edge (width) and the line above 垃圾筒 (folder
+// area height); remembered; double-click goes back to the default.
+function applySidebarSize() {
+  if (IS_MOBILE) return;
+  $('#sidebar').style.width = state.prefs.sidebarWidth && state.prefs.sidebar ? `${state.prefs.sidebarWidth}px` : '';
+  $('#sidebar nav').style.flex = state.prefs.navHeight ? `0 0 ${state.prefs.navHeight}px` : '';
+}
+function dragHandle(handle, onMove, onDone) {
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    handle.classList.add('dragging');
+    $('#sidebar').classList.add('resizing');
+    const move = (ev) => onMove(ev);
+    const up = () => {
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', up);
+      handle.classList.remove('dragging');
+      $('#sidebar').classList.remove('resizing');
+      onDone();
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', up);
+  });
+}
+if (!IS_MOBILE) {
+  dragHandle($('#sidebar-resize'), (e) => {
+    const left = $('#sidebar').getBoundingClientRect().left;
+    state.prefs.sidebarWidth = Math.round(Math.min(480, Math.max(200, e.clientX - left)));
+    applySidebarSize();
+  }, savePrefs);
+  dragHandle($('#sidebar-split'), (e) => {
+    const nav = $('#sidebar nav');
+    const top = nav.getBoundingClientRect().top;
+    const room = $('#sidebar').getBoundingClientRect().bottom - top - 130; // keep 垃圾筒 and 系統 visible
+    state.prefs.navHeight = Math.round(Math.min(room, Math.max(80, e.clientY - top)));
+    applySidebarSize();
+  }, savePrefs);
+  $('#sidebar-resize').addEventListener('dblclick', () => { delete state.prefs.sidebarWidth; applySidebarSize(); savePrefs(); });
+  $('#sidebar-split').addEventListener('dblclick', () => { delete state.prefs.navHeight; applySidebarSize(); savePrefs(); });
+}
+
 $('#btn-toggle-sidebar').addEventListener('click', () => {
   state.prefs.sidebar = !state.prefs.sidebar;
   savePrefs();
   renderSidebar();
+  applySidebarSize();
 });
 
 // ----- Outlook 2010 notes (CSV export) → one DeskNotes note per Outlook note
@@ -2982,6 +3043,10 @@ async function recoverFromBackup() {
 }
 if (api.backups) {
   $('#btn-recover').addEventListener('click', recoverFromBackup);
+  $('#btn-backup-dir').addEventListener('click', async () => {
+    const dir = await api.backups.chooseDir();
+    if (dir) toast(`以後「備份全部」會直接存到：${dir}`);
+  });
   $('#btn-backup-all').addEventListener('click', async () => {
     flushEditor();
     await persist(true); // the backup reads what is saved
@@ -2989,7 +3054,8 @@ if (api.backups) {
     try {
       const r = await api.backups.backupAll();
       syncOverlay.hide();
-      if (r) openModal({ title: '備份好了', text: `${r.dest}\n\n筆記：${r.count} 則${r.failed ? `（另有 ${r.failed} 則沒辦法存成 .html，請看 說明.txt）` : ''}（每則一個 .html，用瀏覽器就能看）\n檔案：資料夾裡的所有檔案\n還原用資料：之後可以用「從備份找回筆記」→「從其他位置選擇備份」找回筆記（含上鎖筆記）`, okText: '好' });
+      if (r?.error) openModal({ title: '備份位置找不到', text: r.error, okText: '好' });
+      else if (r) openModal({ title: '備份好了', text: `${r.dest}\n\n筆記：${r.count} 則${r.failed ? `（另有 ${r.failed} 則沒辦法存成 .html，請看 說明.txt）` : ''}（每則一個 .html，用瀏覽器就能看）\n檔案：資料夾裡的所有檔案\n還原用資料：之後可以用「從備份找回筆記」→「從其他位置選擇備份」找回筆記（含上鎖筆記）`, okText: '好' });
     } catch (err) {
       syncOverlay.hide();
       openModal({ title: '備份失敗', text: err.message || String(err), okText: '好' });
@@ -3487,6 +3553,7 @@ if (api.onBack) api.onBack(handleBack);
 
 (async function init() {
   loadPrefs();
+  applySidebarSize();
   db = await api.load();
   db.folders ||= [];
   db.notes ||= [];

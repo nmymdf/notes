@@ -29,6 +29,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 
 /* ---------- sidebar ---------- */
 #sidebar {
+  position: relative;
   width: 300px; flex: none; background: var(--panel);
   border-radius: 0 var(--radius) 0 0; padding: 18px 12px;
   display: flex; flex-direction: column; transition: width .15s;
@@ -75,6 +76,17 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 #folder-list .nav-item svg, #vault-folder-list .nav-item svg { width: 20px; height: 20px; }
 .nav-item .row-add svg { width: 16px; height: 16px; }
 .trash-bottom { border-top: 1px dashed #555; border-radius: 0 0 10px 10px; margin-top: 8px; padding-top: 14px; }
+/* drag handles: right edge (width) and the line above 垃圾筒 (folder area height) */
+.sidebar-resize { position: absolute; top: 0; right: -4px; width: 8px; height: 100%; cursor: col-resize; z-index: 5; }
+.sidebar-split { height: 8px; margin: 0 6px -8px; cursor: row-resize; flex: none; position: relative; z-index: 1; }
+.sidebar-resize:hover, .sidebar-resize.dragging { background: color-mix(in srgb, var(--accent) 50%, transparent); }
+.sidebar-split:hover, .sidebar-split.dragging { background: color-mix(in srgb, var(--accent) 50%, transparent); border-radius: 4px; }
+#sidebar.collapsed .sidebar-resize, #sidebar.collapsed #btn-system span { display: none; }
+#sidebar.resizing { transition: none; user-select: none; }
+.system-menu { position: absolute; left: 12px; width: 276px; z-index: 70; background: #2a2a2a; border: 1px solid #444; border-radius: 12px;
+  padding: 6px 4px; box-shadow: 0 8px 28px #000c; }
+html.light .system-menu { background: #ffffff; border-color: #d0d0d0; box-shadow: 0 8px 28px #0003; }
+#btn-system.open { background: var(--panel-2); }
 #sidebar.collapsed .trash-bottom span, #sidebar.collapsed .trash-bottom em { display: none; }
 .sync-row { display: flex; align-items: center; }
 .sync-row .import-btn { flex: 1; min-width: 0; }

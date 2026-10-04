@@ -64,7 +64,12 @@
         </div>
         <div id="folder-list"></div>
       </nav>
+      <div class="sidebar-split desktop-only" id="sidebar-split" title="上下拖曳調整資料夾區的高度；雙擊回到預設"></div>
       <a class="nav-item trash-bottom" data-view="trash"><svg><use href="#i-trash"/></svg><span>垃圾筒</span><em id="count-trash"></em></a>
+      <a class="nav-item" id="btn-system"><svg><use href="#i-gear"/></svg><span>系統</span></a>
+      <div class="sidebar-resize desktop-only" id="sidebar-resize" title="左右拖曳調整寬度；雙擊回到預設"></div>
+      <!-- 系統 menu: everything except the trash -->
+      <div class="system-menu hidden" id="system-menu">
       <div class="sync-row">
         <button class="import-btn" id="btn-sync"><svg><use href="#i-sync"/></svg><span>手機同步…</span></button>
         <button class="icon-btn small hidden" id="btn-sync-settings" title="同步設定"><svg><use href="#i-gear"/></svg></button>
@@ -72,10 +77,12 @@
       <div id="sync-last" class="sync-last"></div>
       <button class="import-btn" id="btn-theme" title="切換黑底／白底"><svg><use href="#i-theme"/></svg><span>外觀：黑底</span></button>
       <button class="import-btn desktop-only" id="btn-recover"><svg><use href="#i-sync"/></svg><span>從備份找回筆記…</span></button>
+      <button class="import-btn desktop-only" id="btn-backup-dir" title="設定「備份全部」要存到哪個資料夾"><svg><use href="#i-folder"/></svg><span>設定備份位置…</span></button>
       <button class="import-btn desktop-only" id="btn-backup-all" title="筆記和檔案全部複製到你選的位置（例如隨身碟）"><svg><use href="#i-export"/></svg><span>備份全部…</span></button>
       <button class="import-btn" id="btn-import-outlook" title="匯入 Outlook 2010 匯出的記事 CSV 檔"><svg><use href="#i-import"/></svg><span>匯入 Outlook 記事…</span></button>
       <button class="import-btn undo hidden" id="btn-undo-import" title="把上次從 Outlook 匯入的筆記全部移到垃圾筒"><svg><use href="#i-trash"/></svg><span></span></button>
       <div class="sidebar-foot">快速筆記：Ctrl + Alt + N</div>
+      </div>
     </aside>
 
     <!-- ================= List view ================= -->

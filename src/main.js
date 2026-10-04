@@ -346,12 +346,32 @@ Add-Type -Namespace W -Name K -MemberDefinition '[DllImport("user32.dll")] publi
   //   筆記/        every note as a readable .html page, in its folders
   //   檔案/        the files of the folders
   //   還原用資料/   what 從備份找回筆記 reads (locked notes stay encrypted)
-  ipcMain.handle('backup:all', async () => {
-    const res = await dialog.showOpenDialog(mainWindow, { title: '選擇要備份到哪裡（例如隨身碟）', properties: ['openDirectory', 'createDirectory'] });
+  // 設定備份位置…: remembered in data/settings.json.
+  const settingsFile = () => path.join(dataDir, 'settings.json');
+  const readSettings = () => { try { return JSON.parse(fs.readFileSync(settingsFile(), 'utf8')); } catch { return {}; } };
+  const chooseBackupDir = async () => {
+    const cur = readSettings().backupDir;
+    const res = await dialog.showOpenDialog(mainWindow, {
+      title: '選擇「備份全部」要存到哪裡（例如隨身碟）',
+      defaultPath: cur && fs.existsSync(cur) ? cur : undefined,
+      properties: ['openDirectory', 'createDirectory'],
+    });
     if (res.canceled || !res.filePaths.length) return null;
+    fs.writeFileSync(settingsFile(), JSON.stringify({ ...readSettings(), backupDir: res.filePaths[0] }, null, 2));
+    return res.filePaths[0];
+  };
+  ipcMain.handle('backup:choose-dir', chooseBackupDir);
+  ipcMain.handle('backup:all', async () => {
+    // The set backup place; asked once if none is set yet.
+    let base = readSettings().backupDir;
+    if (base && !fs.existsSync(base)) {
+      return { error: `${base}\n\n找不到這個位置（隨身碟沒插上？）。插上後再按一次，或用「設定備份位置…」換一個位置。` };
+    }
+    if (!base) base = await chooseBackupDir();
+    if (!base) return null;
     const d = new Date();
     const pad = (n) => String(n).padStart(2, '0');
-    let dest = path.join(res.filePaths[0], `DeskNotes 備份 ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}${pad(d.getMinutes())}`);
+    let dest = path.join(base, `DeskNotes 備份 ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}${pad(d.getMinutes())}`);
     for (let i = 2; fs.existsSync(dest); i++) dest = dest.replace(/( \(\d+\))?$/, ` (${i})`);
     // Most important first: the data 從備份找回筆記 needs, then the files.
     backups.copyNotesData(path.join(dest, '還原用資料'), false);
