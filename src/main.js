@@ -122,8 +122,8 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 860,
-    minWidth: 720,
-    minHeight: 480,
+    minWidth: 200,
+    minHeight: 150,
     show: false,
     backgroundColor: '#000000',
     title: `DeskNotes ${app.getVersion()}  —  作者: ArchieKUO`,
