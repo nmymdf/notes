@@ -75,6 +75,7 @@
         <button class="icon-btn small hidden" id="btn-sync-settings" title="同步設定"><svg><use href="#i-gear"/></svg></button>
       </div>
       <div id="sync-last" class="sync-last"></div>
+      <button class="import-btn mobile-only hidden" id="btn-bio"><svg><use href="#i-lock"/></svg><span>指紋解鎖：關</span></button>
       <button class="import-btn" id="btn-theme" title="切換黑底／白底"><svg><use href="#i-theme"/></svg><span>外觀：黑底</span></button>
       <button class="import-btn desktop-only" id="btn-recover"><svg><use href="#i-sync"/></svg><span>從備份找回筆記…</span></button>
       <button class="import-btn desktop-only" id="btn-backup-dir" title="設定「備份全部」要存到哪個資料夾"><svg><use href="#i-folder"/></svg><span>設定備份位置…</span></button>
@@ -146,6 +147,7 @@
         <input type="password" id="vault-pw2" placeholder="再輸入一次密碼">
         <div id="vault-gate-error" class="gate-error"></div>
         <button type="submit" class="text-btn primary" id="vault-gate-ok">解鎖</button>
+        <button type="button" class="text-btn hidden" id="vault-bio">用指紋解鎖</button>
       </form>
     </main>
 

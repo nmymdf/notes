@@ -1019,7 +1019,10 @@ function setView(view) {
   state.selecting = false;
   state.selected.clear();
   render();
-  if (view === 'vault' && !vault.unlocked) setTimeout(() => $('#vault-pw').focus(), 0);
+  if (view === 'vault' && !vault.unlocked) {
+    if (bio) tryBiometricUnlock().then((ok) => { if (ok) render(); else renderBioButton(); });
+    else setTimeout(() => $('#vault-pw').focus(), 0);
+  }
   if (isFileFolder(view)) refreshFiles();
 }
 
@@ -1043,6 +1046,90 @@ async function lockVault() {
   render();
 }
 
+// ----- 指紋解鎖 (phone): the password, kept by the phone's secure hardware,
+// comes back after a fingerprint check.
+const bio = api.biometric;
+function vaultOpened(payload) {
+  vault.notes = payload.notes;
+  vault.folders = payload.folders;
+  vault.tombstones = payload.tombstones || {};
+  repairFolders('vault');
+  resetSnapshot('vault');
+  vault.unlocked = true;
+}
+async function tryBiometricUnlock() {
+  if (!bio || vault.unlocked || !vault.exists || !(await bio.enabled())) return false;
+  let pw;
+  try {
+    pw = await bio.unlock();
+  } catch (err) {
+    if (err.code === 'invalidated' || err.code === 'not_enabled') {
+      await bio.disable();
+      toast('手機的指紋有變更，請用密碼解鎖，再重新開啟指紋解鎖');
+    }
+    return false; // cancelled: the password field is there
+  }
+  syncOverlay.show('解鎖中…');
+  try {
+    const payload = await api.vault.unlock(pw);
+    if (!payload) { await bio.disable(); toast('密碼已變更，請用新密碼解鎖'); return false; }
+    vaultOpened(payload);
+    return true;
+  } finally {
+    syncOverlay.hide();
+  }
+}
+// After a password unlock: offer 指紋解鎖 once.
+async function offerBiometric(pw) {
+  if (!bio || !(await bio.available()) || (await bio.enabled())) return;
+  try { if (localStorage.getItem('desknotes.bioAsked')) return; localStorage.setItem('desknotes.bioAsked', '1'); } catch { /* ignore */ }
+  const ok = await openModal({
+    title: '以後要用指紋解鎖嗎？',
+    text: '下次進入上鎖筆記時，用指紋就能打開，不用打密碼。\n密碼還是要記得：重新登錄指紋、重新安裝 App 或在電腦上，都要用密碼。\n可以隨時在「系統」裡關掉。',
+    okText: '用指紋', cancelText: '不用',
+  });
+  if (ok) await enableBiometric(pw);
+}
+async function enableBiometric(pw) {
+  try {
+    await bio.enable(pw);
+    toast('已開啟指紋解鎖');
+  } catch (err) {
+    if (err.code !== 'cancel') toast(`無法開啟指紋解鎖：${err.message || err}`);
+  }
+  renderBioButton();
+}
+async function renderBioButton() {
+  if (!bio) return;
+  const avail = await bio.available();
+  $('#btn-bio').classList.toggle('hidden', !avail);
+  $('#btn-bio span').textContent = (await bio.enabled()) ? '指紋解鎖：開' : '指紋解鎖：關';
+  $('#vault-bio').classList.toggle('hidden', !(vault.exists && (await bio.enabled())));
+}
+if (bio) {
+  $('#btn-bio').addEventListener('click', async () => {
+    if (await bio.enabled()) {
+      await bio.disable();
+      toast('已關閉指紋解鎖');
+    } else if (!vault.exists) {
+      toast('請先設定上鎖筆記的密碼');
+    } else {
+      const pw = await openModal({ title: '開啟指紋解鎖', text: '請輸入上鎖筆記的密碼', input: '', password: true, okText: '下一步' });
+      if (!pw) return;
+      syncOverlay.show('確認密碼…');
+      let payload;
+      try { payload = await api.vault.unlock(pw); } finally { syncOverlay.hide(); }
+      if (!payload) { toast('密碼錯誤'); return; }
+      if (!vault.unlocked) vaultOpened(payload);
+      await enableBiometric(pw);
+      render();
+    }
+    renderBioButton();
+  });
+  $('#vault-bio').addEventListener('click', async () => { if (await tryBiometricUnlock()) render(); });
+  renderBioButton();
+}
+
 // Asks for the password when needed (used when moving notes in from other views).
 async function ensureVaultUnlocked() {
   if (vault.unlocked) return true;
@@ -1051,16 +1138,13 @@ async function ensureVaultUnlocked() {
     toast('請先設定上鎖筆記的密碼');
     return false;
   }
+  if (await tryBiometricUnlock()) return true;
   const pw = await openModal({ title: '輸入上鎖筆記密碼', input: '', password: true, okText: '解鎖' });
   if (!pw) return false;
   const payload = await api.vault.unlock(pw);
   if (!payload) { toast('密碼錯誤'); return false; }
-  vault.notes = payload.notes;
-  vault.folders = payload.folders;
-  vault.tombstones = payload.tombstones || {};
-  repairFolders('vault');
-  resetSnapshot('vault');
-  vault.unlocked = true;
+  vaultOpened(payload);
+  offerBiometric(pw);
   return true;
 }
 
@@ -1188,7 +1272,10 @@ async function changeVaultPassword() {
   flushEditor();
   await persist(true);
   toast('正在重新加密…');
-  if (await api.vault.changePassword(oldPw, newPw)) toast('密碼已變更');
+  if (await api.vault.changePassword(oldPw, newPw)) {
+    toast('密碼已變更');
+    if (bio && (await bio.enabled())) await enableBiometric(newPw); // keep 指紋解鎖 working with the new password
+  }
   else toast('目前的密碼錯誤，密碼沒有變更');
 }
 
@@ -1229,6 +1316,7 @@ $('#vault-gate').addEventListener('submit', async (e) => {
     $('#vault-pw').value = '';
     $('#vault-pw2').value = '';
     render();
+    offerBiometric(pw);
   } finally {
     btn.disabled = false;
     renderVaultGate(inVaultView() && !vault.unlocked);

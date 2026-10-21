@@ -11,6 +11,8 @@ import { Capacitor, CapacitorHttp, registerPlugin } from '@capacitor/core';
 
 // Our own small Android plugin (android/.../FolderOpenerPlugin.java).
 const FolderOpener = registerPlugin('FolderOpener');
+const BiometricVault = registerPlugin('BiometricVault');
+const BIO_FILE = 'desknotes/biometric.json'; // the vault password, encrypted by the phone's secure hardware
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { App } from '@capacitor/app';
 import { Share } from '@capacitor/share';
@@ -462,6 +464,17 @@ const filesApi = {
 const api = {
   platform: 'android',
   mobile: true,
+  // 指紋解鎖 for 上鎖筆記 (android/.../BiometricVaultPlugin.java).
+  biometric: NATIVE ? {
+    async available() { try { return (await BiometricVault.isAvailable()).available; } catch { return false; } },
+    async enabled() { try { return !!JSON.parse(await readText(BIO_FILE)).data; } catch { return false; } },
+    async enable(password) { await writeText(BIO_FILE, JSON.stringify(await BiometricVault.enable({ secret: password }))); },
+    async unlock() { return (await BiometricVault.unlock(JSON.parse(await readText(BIO_FILE)))).secret; },
+    async disable() {
+      try { await Filesystem.deleteFile({ path: BIO_FILE, directory: DIR }); } catch { /* none */ }
+      try { await BiometricVault.disable(); } catch { /* none */ }
+    },
+  } : null,
   version: __APP_VERSION__,
 
   async load() {
