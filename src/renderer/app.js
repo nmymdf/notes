@@ -1663,18 +1663,6 @@ scroller.addEventListener('drop', async (e) => {
 });
 
 let selectedImg = null;
-function showImageBar(img) {
-  hideImageBar();
-  selectedImg = img;
-  img.classList.add('selected');
-  const bar = $('#img-bar');
-  bar.querySelector('[data-act="restore"]').classList.toggle('hidden', !readDrawing(img)?.base);
-  bar.classList.remove('hidden');
-  const r = img.getBoundingClientRect();
-  const br = bar.getBoundingClientRect();
-  bar.style.left = Math.max(8, Math.min(r.left, innerWidth - br.width - 8)) + 'px';
-  bar.style.top = Math.max(8, r.top - br.height - 8) + 'px';
-}
 function hideImageBar() {
   if (selectedImg) selectedImg.classList.remove('selected');
   selectedImg = null;
@@ -1700,8 +1688,10 @@ scroller.addEventListener('scroll', hideImageBar);
 
 editor.addEventListener('click', (e) => {
   if (e.target.tagName === 'IMG') {
-    if (IS_MOBILE) { editor.blur(); openLightbox(e.target); return; }
-    showImageBar(e.target);
+    // Pictures are shown small; one click opens them full screen.
+    if (IS_MOBILE) editor.blur();
+    hideImageBar();
+    openLightbox(e.target);
     return;
   }
   hideImageBar();
@@ -1716,6 +1706,11 @@ editor.addEventListener('click', (e) => {
 editor.addEventListener('contextmenu', (e) => {
   if (IS_MOBILE) return;
   e.preventDefault();
+  // Right-click on a picture selects it, so 剪下 / 複製 can move it to another note.
+  if (e.target.tagName === 'IMG') {
+    const r = document.createRange(); r.selectNode(e.target);
+    const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+  }
   const cmd = (c) => () => { editor.focus(); api.editCommand(c); };
   showContextMenu(e.clientX, e.clientY, [
     { label: '剪下  (Ctrl+X)', action: cmd('cut') },
@@ -1723,12 +1718,6 @@ editor.addEventListener('contextmenu', (e) => {
     { label: '貼上  (Ctrl+V)', action: cmd('paste') },
     { label: '全選  (Ctrl+A)', action: cmd('selectAll') },
   ]);
-});
-editor.addEventListener('dblclick', (e) => {
-  if (e.target.tagName !== 'IMG') return;
-  hideImageBar();
-  if (!IS_MOBILE && e.target.dataset.drawing) { drawOnImage(e.target); return; }
-  openLightbox(e.target);
 });
 
 // ----- picture viewer. On the phone pictures can be zoomed like in a photo
